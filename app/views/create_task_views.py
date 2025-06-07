@@ -1,7 +1,7 @@
 import os
 import importlib
 from rest_framework.decorators import api_view
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.urls import path
 from django.conf import settings
 
@@ -29,6 +29,8 @@ def _create_view_for_task(file_name: str):
 
         # We assume each class has a method called api_response(request)
         response_data = task_instance.api_response(request)
+        if isinstance(response_data, HttpResponse):  # covers JsonResponse, etc.
+            return response_data
         return JsonResponse(response_data)
 
     return task_view

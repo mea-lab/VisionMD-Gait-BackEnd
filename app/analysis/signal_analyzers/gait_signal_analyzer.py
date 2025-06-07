@@ -21,7 +21,6 @@ class GaitSignalAnalyzer(BaseSignalAnalyzer):
     # --- START: Abstract properties definitions
     # ------------------------------------------------------------------
 
-    _GaitPhaseTransformer = None
     _metrabs_joint_order = np.array(['htop', 'neck', 'rsho', 'relb', 'rwri', 'lsho',
                             'lelb', 'lwri', 'rhip', 'rkne', 'rank', 'lhip', 
                             'lkne', 'lank', 'pelv', 'spin', 'head'])
@@ -43,44 +42,20 @@ class GaitSignalAnalyzer(BaseSignalAnalyzer):
     # ------------------------------------------------------------------
     # --- START: Abstract methods ---
     # ------------------------------------------------------------------
-    def analyze(self, corrected_poses3D, fps = 30, height_mm = 1500) -> dict:
-        GaitSignalAnalyzer._gait_phase_order_idx = np.array(
-            [self._metrabs_joint_order.tolist().index(j) for j in GaitSignalAnalyzer._gait_phase_joint_order]
-        )
-        if GaitSignalAnalyzer._GaitPhaseTransformer is None:
-            GaitSignalAnalyzer._GaitPhaseTransformer = load_default_model(pos_divider=2)
+    def analyze(self, phases, strides, poses_3D, fps) -> dict:
+        if GaitSignalAnalyzer._gait_phase_order_idx is None:
+            GaitSignalAnalyzer._gait_phase_order_idx = np.array(
+                [self._metrabs_joint_order.tolist().index(j) for j in GaitSignalAnalyzer._gait_phase_joint_order]
+            )
+    
+        phase_ordered = np.take(phases, [0, 4, 1, 5, 2, 6, 3, 7], axis=-1)
+        state, _, _ = gait_kalman_smoother(phase_ordered)
+        timestamps = np.arange(state.shape[0])
+        gait_event_dic = get_event_times(state, timestamps)
 
-        phases_ordered, strides, gait_event_dic = self.process_gait_keypoints(corrected_poses3D, height_mm)
-        strides = strides
-        phases = np.reshape(phases_ordered, [-1, 4, 2])[:, :, 0]
-        results = self.analyze_gait_video_features(gait_event_dic, corrected_poses3D, GaitSignalAnalyzer._gait_phase_order_idx, fps)
+        results = self.analyze_gait_video_features(gait_event_dic, poses_3D, GaitSignalAnalyzer._gait_phase_order_idx, fps)
 
-        # Generate land mark colors
-        n_frames = corrected_poses3D.shape[0]
-        n_joints = corrected_poses3D.shape[1]
-        landmark_colors = np.zeros((n_frames, n_joints, 3), dtype=np.uint8)
-
-        # indices of the ankle joints in self._gait_phase_joint_order
-        LEFT_ANKLE_IDX  = self._gait_phase_joint_order.index('lank')
-        RIGHT_ANKLE_IDX = self._gait_phase_joint_order.index('rank')
-
-        # stance vs swing flags for each frame
-        left_stance  = np.zeros(n_frames, dtype=bool)
-        right_stance = np.zeros(n_frames, dtype=bool)
-
-        for d, u in zip(gait_event_dic['left_down'], gait_event_dic['left_up']):
-            left_stance[int(round(d)): int(round(u)) + 1] = True
-        for d, u in zip(gait_event_dic['right_down'], gait_event_dic['right_up']):
-            right_stance[int(round(d)): int(round(u)) + 1] = True
-
-        # apply colors – green = stance, blue = swing
-        landmark_colors[left_stance,  LEFT_ANKLE_IDX]  = [0, 255, 0]
-        landmark_colors[~left_stance, LEFT_ANKLE_IDX]  = [0,   0, 255]
-        landmark_colors[right_stance, RIGHT_ANKLE_IDX] = [0, 255, 0]
-        landmark_colors[~right_stance,RIGHT_ANKLE_IDX] = [0,   0, 255]
-
-
-        return results, phases, strides, landmark_colors
+        return results, gait_event_dic
 
 
     # ------------------------------------------------------------------
@@ -94,45 +69,6 @@ class GaitSignalAnalyzer(BaseSignalAnalyzer):
     # ------------------------------------------------------------------
     # --- START: Helper methods ---
     # ------------------------------------------------------------------
-
-    ### ----- Function that returns dictionary of gait events from 3D points -----
-    def process_gait_keypoints(
-        self,
-        poses3D,
-        height_mm,
-        L=60,
-        pos_divider=2
-    ):
-        """
-        Processes a 3D keypoints using the gait transformer model and returns phases, strides and gait events.
-
-        Parameters:
-            output_directory (str): Directory to save the resulting JSON file.
-            height (float): Subject height in mm
-            L (int): Window length for inference
-            pos_divider (int): Positional divider used in model loading
-        """
-        # Reorder, normalize and transform keypoints
-        keypoints = poses3D.copy()[:, GaitSignalAnalyzer._gait_phase_order_idx]
-        keypoints = keypoints / 1000.0          # mm → m
-        keypoints = keypoints - np.mean(keypoints, axis=1, keepdims=True)
-        keypoints = keypoints[:, :, [0, 2, 1]]  # reordering axes
-        keypoints[:, :, 2] *= -1                # flip z
-
-        # Run inference
-        height_arr = np.array(height_mm, dtype=float)
-        phase, stride = gait_phase_stride_inference(keypoints, height_arr, GaitSignalAnalyzer._GaitPhaseTransformer, L * pos_divider)
-
-        # Kalman smoothing
-        phase_ordered = np.take(phase, [0, 4, 1, 5, 2, 6, 3, 7], axis=-1)
-        state, _, _ = gait_kalman_smoother(phase_ordered)
-        timestamps = np.arange(state.shape[0])
-        gait_event_dic = get_event_times(state, timestamps)
-
-        # Return result as dictionary
-        print(f"Processed 3D points")
-        return phase_ordered, stride, gait_event_dic
-    
     
     def analyze_gait_video_features(
         self,
@@ -275,7 +211,6 @@ class GaitSignalAnalyzer(BaseSignalAnalyzer):
         arm_corr = np.corrcoef(kp_ctr[:, 15, 2], kp_ctr[:, 12, 2])[0, 1]
 
         results = {
-            "Trial name":                    [""],
             "Average stance time":           float(avg_stance),
             "Average swingtime":             float(avg_swing),
             "Average double support time":   float(avg_double),

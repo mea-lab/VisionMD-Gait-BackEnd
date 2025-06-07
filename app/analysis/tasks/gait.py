@@ -17,8 +17,12 @@ import gc
 from PIL import Image
 from .base_task import BaseTask
 from django.conf import settings
+from rest_framework.response import Response
 
 from app.analysis.signal_analyzers.gait_signal_analyzer import GaitSignalAnalyzer
+from app.analysis.models.gait_transformer.gait_phase_transformer_old import load_default_model, get_gait_phase_stride_transformer, gait_phase_stride_inference
+from app.analysis.models.gait_transformer.gait_phase_kalman import gait_kalman_smoother, compute_phases, get_event_times
+
 
 
 class GaitTask(BaseTask):
@@ -48,7 +52,18 @@ class GaitTask(BaseTask):
     height_cm = None
 
     skeleton = 'mpi_inf_3dhp_17'
+
     _metrabs_detector = None
+    _gait_phase_transformer = None
+    _metrabs_joint_order = np.array(['htop', 'neck', 'rsho', 'relb', 'rwri', 'lsho',
+                            'lelb', 'lwri', 'rhip', 'rkne', 'rank', 'lhip', 
+                            'lkne', 'lank', 'pelv', 'spin', 'head'])
+    
+    _gait_phase_joint_order = ['pelv', 'rhip', 'rkne', 'rank', 'lhip', 'lkne', 
+                            'lank', 'spin', 'neck', 'head', 'htop', 'lsho', 
+                            'lelb', 'lwri', 'rsho', 'relb', 'rwri']
+    
+    _gait_phase_order_idx = None
     # ------------------------------------------------------------------
     # --- END: Abstract properties definitions
     # ------------------------------------------------------------------
@@ -64,42 +79,51 @@ class GaitTask(BaseTask):
         """
         Function that handles the api response for each task
         """
-        print("Request:",request,"\n\n")
+        try:
+            # 1) Getting video parameters from request
+            self.prepare_video_parameters(request)
 
-        # Getting landmarks from metrabs model and then clearing memory for next model
-        self.prepare_video_parameters(request)
-        with tf.device('/CPU:0'):
-            detector = self.get_detector()
+            # 2) Getting detector and using detector to get landmarks
+            with tf.device('/CPU:0'):
+                detector = self.get_detector()
+            landmarks = self.extract_landmarks(detector)    
+            tf.keras.backend.clear_session()
+            context().clear_kernel_cache()
 
-        landmarks = self.extract_landmarks(detector)    
-        # del GaitTask._metrabs_detector
-        # GaitTask._metrabs_detector = None
-        tf.keras.backend.clear_session()
-        context().clear_kernel_cache()
+            # 2) Getting signals
+            phases, strides, signals = self.calculate_signal(landmarks['poses3d'], self.height_cm * 10)
 
-        # Getting signal analyzer from metrabs model and then clearing memory for next model
-        signal_analyzer = self.get_signal_analyzer()
-        results, phases, strides, landmark_colors = signal_analyzer.analyze(landmarks['poses3d'])
-        signals = self.calculate_signal(phases, strides)
-        signals = {key: [float(v) for v in value] for key, value in signals.items()}
+            # 3) Get signal analyzer to use it to get feature results
+            signal_analyzer = self.get_signal_analyzer()
+            results, gait_event_dic = signal_analyzer.analyze(phases, strides, landmarks['poses3d'], self.fps)
 
-        del GaitSignalAnalyzer._GaitPhaseTransformer, signal_analyzer
-        GaitSignalAnalyzer._GaitPhaseTransformer, signal_analyzer = None, None
-        tf.keras.backend.clear_session()
-        context().clear_kernel_cache()
+            del GaitTask._gait_phase_transformer, signal_analyzer
+            GaitTask._gait_phase_transformer, signal_analyzer = None, None
+            tf.keras.backend.clear_session()
+            context().clear_kernel_cache()
 
-        results['signals'] = signals
-        results['landMarks'] = landmarks['poses2d'].tolist()
-        results['poses3D'] = landmarks['poses3d'].tolist()
-        results['landmark_colors'] = landmark_colors.tolist()
+            # 5) Get landmark colors
+            landmark_colors = self.calculate_landmark_colors(landmarks['poses3d'], gait_event_dic, self.fps)
 
-        #Clean up memory
-        if self.video:
-            self.video.release()
-        if os.path.exists(self.file_path):
-            os.remove(self.file_path)
-        tf.keras.backend.clear_session()
-        context().clear_kernel_cache()
+            # 4) Build up response to API call
+            results['signals'] = signals
+            results['landMarks'] = landmarks['poses2d'].tolist()
+            results['poses3D'] = landmarks['poses3d'].tolist()
+            # results['landmark_colors'] = landmark_colors.tolist()
+            results['gait_event_dic'] = {
+                k: v.tolist()
+                for k, v in gait_event_dic.items()
+            }
+
+            # 5) Clean up memory
+            if self.video:
+                self.video.release()
+            if os.path.exists(self.file_path):
+                os.remove(self.file_path)
+            tf.keras.backend.clear_session()
+            context().clear_kernel_cache()
+        except Exception as e:
+            return Response(f"Error with gait analysis: {str(e)}", status=500)
 
         return results
 
@@ -137,15 +161,12 @@ class GaitTask(BaseTask):
         end_time = json_data['end_time']
         focal_length = int(json_data.get('focal_length')) if json_data.get('focal_length') else None
         height_cm = int(json_data.get('height')) if json_data.get('height') else None
+        if(height_cm == None):
+            raise Exception("Invalid or missing height in POST data")
 
-
-        print("start_time", start_time)
-        print("end_time", end_time)
         fps = video.get(cv2.CAP_PROP_FPS)
         start_frame_idx = math.floor(fps * start_time)
         end_frame_idx   = math.ceil(fps * end_time)
-        print("start_time", start_frame_idx)
-        print("end_time", end_frame_idx)
         new_x = int(max(0, original_bounding_box['x'] - original_bounding_box['width'] * 0.125))
         new_y = int(max(0, original_bounding_box['y'] - original_bounding_box['height'] * 0.125))
         new_width = int(min(video_width - new_x, original_bounding_box['width'] * 1.25))
@@ -219,44 +240,63 @@ class GaitTask(BaseTask):
         return GaitSignalAnalyzer()
 
     
-    def calculate_signal(self, phases, strides, walking_prob=None) -> dict:
+    def calculate_signal(self, poses3D, height_mm, L=60, pos_divider=2) -> dict:
         """
-        Given a set of strides and phases a dictionary containing raw 1D signal arrays.
+        Processes 3D keypoints using the gait transformer model and returns phases, strides.
+
+        Parameters:
+            output_directory (str): Directory to save the resulting JSON file.
+            height (float): Subject height in mm
+            L (int): Window length for inference
+            pos_divider (int): Positional divider used in model loading
         """
+
+        if GaitTask._gait_phase_transformer is None:
+            GaitTask._gait_phase_transformer = load_default_model(pos_divider=2)
+        GaitTask._gait_phase_order_idx = np.array(
+            [self._metrabs_joint_order.tolist().index(j) for j in GaitTask._gait_phase_joint_order]
+        )
+
+        keypoints = poses3D.copy()[:, GaitTask._gait_phase_order_idx]
+        keypoints = keypoints / 1000.0
+        keypoints = keypoints - np.mean(keypoints, axis=1, keepdims=True)
+        keypoints = keypoints[:, :, [0, 2, 1]]
+        keypoints[:, :, 2] *= -1
+
+
+        # Run inference
+        height_arr = np.array(height_mm, dtype=float)
+        phases, strides = gait_phase_stride_inference(keypoints, height_arr, GaitTask._gait_phase_transformer, L * pos_divider)
             
-        traces = {}
+        signals = {}
 
         # Foot position
-        traces["Foot right angle"] = list(strides[:, 0])
-        traces["Foot left angle"] = list(strides[:, 1])
+        signals["Foot right angle"] = list(strides[:, 0])
+        signals["Foot left angle"] = list(strides[:, 1])
 
         # Foot velocity
-        traces["Foot right velocity"] = list(strides[:, 3])
-        traces["Foot left velocity"] = list(strides[:, 4])
+        signals["Foot right velocity"] = list(strides[:, 3])
+        signals["Foot left velocity"] = list(strides[:, 4])
 
         # Pelvis velocity
-        traces["Pelvis velocity"] = list(strides[:, 2])
+        signals["Pelvis velocity"] = list(strides[:, 2])
 
         # Hip angles
-        traces["Hip right angle"] = list(strides[:, 5])
-        traces["Hip left angle"] = list(strides[:, 6])
+        signals["Hip right angle"] = list(strides[:, 5])
+        signals["Hip left angle"] = list(strides[:, 6])
 
         # Knee angles
-        traces["Knee right angle"] = list(strides[:, 7])
-        traces["Knee left angle"] = list(strides[:, 8])
+        signals["Knee right angle"] = list(strides[:, 7])
+        signals["Knee left angle"] = list(strides[:, 8])
 
         # Phases
-        traces["Phase 0"] = list(phases[:, 0])
-        traces["Phase 1"] = list(phases[:, 1])
-        traces["Phase 2"] = list(phases[:, 2])
-        traces["Phase 3"] = list(phases[:, 3])
-        # traces["Phase left 0"] = list(phases[:, 3])
+        signals["Phase 0"] = list(phases[:, 0])
+        signals["Phase 1"] = list(phases[:, 1])
+        signals["Phase 2"] = list(phases[:, 2])
+        signals["Phase 3"] = list(phases[:, 3])
 
-        # Walking probability
-        if walking_prob is not None:
-            traces["walking_prob"] = list(walking_prob[:])
-
-        return traces
+        signals = {key: [float(v) for v in value] for key, value in signals.items()}
+        return phases, strides, signals
 
     def extract_landmarks(self, detector=None) -> tuple:
         """
@@ -339,13 +379,21 @@ class GaitTask(BaseTask):
             n = tf.shape(batch_tensor)[0]
             K_batch = tf.tile(tf.expand_dims(K_tensor, 0), [n,1,1])
 
-            pred = GaitTask._metrabs_detector.detect_poses_batched(
-                images=batch_tensor,
-                intrinsic_matrix=K_batch,
-                skeleton=self.skeleton,
-                detector_flip_aug=True,
-                detector_threshold=0.2,
-            )
+            if focal_length_equivalent:
+                pred = GaitTask._metrabs_detector.detect_poses_batched(
+                    images=batch_tensor,
+                    intrinsic_matrix=K_batch,
+                    skeleton=self.skeleton,
+                    detector_flip_aug=True,
+                    detector_threshold=0.2,
+                )
+            else:
+                pred = GaitTask._metrabs_detector.detect_poses_batched(
+                    images=batch_tensor,
+                    skeleton=self.skeleton,
+                    detector_flip_aug=True,
+                    detector_threshold=0.2,
+                )
 
             for j in range(len(resized_cropped_frame_batch)):
                 if pred["poses2d"][j].shape[0] > 0:
@@ -398,6 +446,75 @@ class GaitTask(BaseTask):
         Return a caluclated scalar factor used to normalize the raw 1D signal.
         """
         return None
+    
+
+    def calculate_landmark_colors(self, poses_3D, gait_event_dic, fps) -> np.ndarray:
+        """
+        Returns an (n_frames, n_joints, 3) uint8 array where:
+            left / right ankle are green during stance, blue during swing
+            incomplete steps that run off the start or end of the clip are handled
+            gracefully instead of raising.
+
+        Now assumes gait_event_dic values are frame indices already.
+        """
+        n_frames, n_joints = poses_3D.shape[:2]
+        landmark_colors = np.zeros((n_frames, n_joints, 3), dtype=np.uint8)
+
+        # -------------- ankle indices in the plotting order -----------------------
+        try:
+            L_ANK = int(np.where(self._metrabs_joint_order == "lank")[0][0])
+            R_ANK = int(np.where(self._metrabs_joint_order == "rank")[0][0])
+        except ValueError as e:
+            raise ValueError("Missing 'lank' or 'rank' in _metrabs_joint_order") from e
+
+        left_stance  = np.zeros(n_frames, dtype=bool)
+        right_stance = np.zeros(n_frames, dtype=bool)
+
+        # helper: take whatever sequence is provided, round to ints, clip to [0, n_frames-1]
+        def to_frame_indices(arr):
+            arr = np.asarray(arr, dtype=float)      # allow floats, etc.
+            idx = np.rint(arr).astype(int)          # round to nearest frame
+            return np.clip(idx, 0, n_frames - 1)
+
+        # grab and sanitize the four event lists
+        ld_idx = to_frame_indices(gait_event_dic.get("left_down",  []))
+        lu_idx = to_frame_indices(gait_event_dic.get("left_up",    []))
+        rd_idx = to_frame_indices(gait_event_dic.get("right_down", []))
+        ru_idx = to_frame_indices(gait_event_dic.get("right_up",   []))
+
+        # ---------------------- helper to build stance mask -----------------------
+        def fill_mask(mask: np.ndarray, downs: np.ndarray, ups: np.ndarray):
+            """
+            Marks mask[d : u] = True for every (down, up) pair.
+            If the lists are unbalanced, prepend/append the start or end frame.
+            """
+            # Balance lengths by padding with start (0) or end (n_frames-1)
+            if len(downs) > len(ups):
+                ups = np.append(ups, n_frames - 1)
+            elif len(ups) > len(downs):
+                downs = np.insert(downs, 0, 0)
+
+            # Now len(downs) == len(ups)
+            for d, u in zip(downs, ups):
+                if d <= u:
+                    mask[d : u + 1] = True
+                else:
+                    mask[u : d + 1] = True
+
+        # build stance/swing masks
+        fill_mask(left_stance,  ld_idx, lu_idx)
+        fill_mask(right_stance, rd_idx, ru_idx)
+
+        # ---------------------- assign colours ------------------------------------
+        # green = stance, blue = swing
+        landmark_colors[left_stance,  L_ANK] = [0, 255,   0]
+        landmark_colors[~left_stance, L_ANK] = [0,   0, 255]
+        landmark_colors[right_stance, R_ANK] = [0, 255,   0]
+        landmark_colors[~right_stance,R_ANK] = [0,   0, 255]
+
+        return landmark_colors
+
+
     # -------------------------------------------------------------
     # --- END: Abstract methods definitions
     # -------------------------------------------------------------
