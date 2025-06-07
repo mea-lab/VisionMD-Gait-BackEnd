@@ -159,7 +159,7 @@ class GaitTask(BaseTask):
         original_bounding_box = json_data['boundingBox']
         start_time = json_data['start_time']
         end_time = json_data['end_time']
-        focal_length = int(json_data.get('focal_length')) if json_data.get('focal_length') else None
+        focal_length = int(json_data.get('focal_length')) if json_data.get('focal_length') else -1
         height_cm = int(json_data.get('height')) if json_data.get('height') else None
         if(height_cm == None):
             raise Exception("Invalid or missing height in POST data")
