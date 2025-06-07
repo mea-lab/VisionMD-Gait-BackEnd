@@ -13,7 +13,7 @@ def get_video_data(request):
 
     # If the base folder does not exist, return an empty list
     if not os.path.isdir(folder_path):
-        return Response("Video project folder does not exist.", status=400)
+        os.makedirs(folder_path, exist_ok=True)
 
     # If a specific folder ID is provided
     if folder_id:
