@@ -16,11 +16,12 @@ https://github.com/mea-lab/VideoAnalysisToolBackend/tree/main
 
 ## Local Setup
 
-### 1. Clone the Repository
+### 1. Clone the Repository and Switch to "static" branch
 
 ```bash
 git clone https://github.com/mea-lab/VideoAnalysisToolBackend.git
 cd VideoAnalysisToolBackend
+git checkout static
 ```
 
 ### 2. Create and Activate the Conda Environment
