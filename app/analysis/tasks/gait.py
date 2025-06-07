@@ -161,6 +161,8 @@ class GaitTask(BaseTask):
         end_time = json_data['end_time']
         focal_length = int(json_data.get('focal_length')) if json_data.get('focal_length') else -1
         height_cm = int(json_data.get('height')) if json_data.get('height') else None
+        if (focal_length < 5 or focal_length > 35):
+            focal_length = -1
         if(height_cm == None):
             raise Exception("Invalid or missing height in POST data")
 
@@ -379,7 +381,7 @@ class GaitTask(BaseTask):
             n = tf.shape(batch_tensor)[0]
             K_batch = tf.tile(tf.expand_dims(K_tensor, 0), [n,1,1])
 
-            if focal_length_equivalent:
+            if focal_length_equivalent != -1:
                 pred = GaitTask._metrabs_detector.detect_poses_batched(
                     images=batch_tensor,
                     intrinsic_matrix=K_batch,
