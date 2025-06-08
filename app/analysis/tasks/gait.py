@@ -50,6 +50,7 @@ class GaitTask(BaseTask):
     file_path = None
     focal_length = None
     height_cm = None
+    task_name = None
 
     skeleton = 'mpi_inf_3dhp_17'
 
@@ -114,6 +115,7 @@ class GaitTask(BaseTask):
                 k: v.tolist()
                 for k, v in gait_event_dic.items()
             }
+            results['Task name'] = self.task_name
 
             # 5) Clean up memory
             if self.video:
@@ -147,6 +149,8 @@ class GaitTask(BaseTask):
             raise Exception("Invalid or missing 'json_data' in POST data")
     
         file_name = f"{uuid.uuid4().hex[:15].upper()}.mp4"
+        task_name = f"{json_data['task_name']}_{json_data['id']}"
+
         folder_path = os.path.join(APP_ROOT, '../video_uploads')
         file_path = os.path.join(folder_path, file_name)
         FileSystemStorage(folder_path).save(file_name, request.FILES['video'])
@@ -193,6 +197,7 @@ class GaitTask(BaseTask):
         self.end_frame_idx = end_frame_idx
         self.focal_length = focal_length
         self.height_cm = height_cm
+        self.task_name = task_name
 
         return {
             "video": video,
