@@ -110,7 +110,7 @@ class GaitTask(BaseTask):
             results['signals'] = signals
             results['landMarks'] = landmarks['poses2d'].tolist()
             results['poses3D'] = landmarks['poses3d'].tolist()
-            # results['landmark_colors'] = landmark_colors.tolist()
+            results['landmark_colors'] = landmark_colors.tolist()
             results['gait_event_dic'] = {
                 k: v.tolist()
                 for k, v in gait_event_dic.items()
@@ -457,17 +457,12 @@ class GaitTask(BaseTask):
 
     def calculate_landmark_colors(self, poses_3D, gait_event_dic, fps) -> np.ndarray:
         """
-        Returns an (n_frames, n_joints, 3) uint8 array where:
-            left / right ankle are green during stance, blue during swing
-            incomplete steps that run off the start or end of the clip are handled
-            gracefully instead of raising.
-
-        Now assumes gait_event_dic values are frame indices already.
+        Build an (n_frames, n_joints, 3) uint8 array of RGB colours.
         """
         n_frames, n_joints = poses_3D.shape[:2]
-        landmark_colors = np.zeros((n_frames, n_joints, 3), dtype=np.uint8)
+        landmark_colors = np.full((n_frames, n_joints, 3), [255, 0, 0], dtype=np.uint8)
 
-        # -------------- ankle indices in the plotting order -----------------------
+        # indices of the two ankles in the plotting order
         try:
             L_ANK = int(np.where(self._metrabs_joint_order == "lank")[0][0])
             R_ANK = int(np.where(self._metrabs_joint_order == "rank")[0][0])
@@ -477,47 +472,39 @@ class GaitTask(BaseTask):
         left_stance  = np.zeros(n_frames, dtype=bool)
         right_stance = np.zeros(n_frames, dtype=bool)
 
-        # helper: take whatever sequence is provided, round to ints, clip to [0, n_frames-1]
+        # helper – convert list-like input to *floored* int indices inside range
         def to_frame_indices(arr):
-            arr = np.asarray(arr, dtype=float)      # allow floats, etc.
-            idx = np.rint(arr).astype(int)          # round to nearest frame
+            arr = np.asarray(arr, dtype=float)
+            idx = np.floor(arr).astype(int)          # floor, don’t round
             return np.clip(idx, 0, n_frames - 1)
 
-        # grab and sanitize the four event lists
-        ld_idx = to_frame_indices(gait_event_dic.get("left_down",  []))
-        lu_idx = to_frame_indices(gait_event_dic.get("left_up",    []))
-        rd_idx = to_frame_indices(gait_event_dic.get("right_down", []))
-        ru_idx = to_frame_indices(gait_event_dic.get("right_up",   []))
+        # sanitise event arrays
+        ld = to_frame_indices(gait_event_dic.get("left_down",  []))
+        lu = to_frame_indices(gait_event_dic.get("left_up",    []))
+        rd = to_frame_indices(gait_event_dic.get("right_down", []))
+        ru = to_frame_indices(gait_event_dic.get("right_up",   []))
 
-        # ---------------------- helper to build stance mask -----------------------
         def fill_mask(mask: np.ndarray, downs: np.ndarray, ups: np.ndarray):
-            """
-            Marks mask[d : u] = True for every (down, up) pair.
-            If the lists are unbalanced, prepend/append the start or end frame.
-            """
-            # Balance lengths by padding with start (0) or end (n_frames-1)
-            if len(downs) > len(ups):
-                ups = np.append(ups, n_frames - 1)
-            elif len(ups) > len(downs):
-                downs = np.insert(downs, 0, 0)
+            if len(downs) > len(ups):                         # trailing stance
+                ups = np.append(ups, n_frames)                # sentinel for end
+            elif len(ups) > len(downs):                       # leading stance
+                downs = np.insert(downs, 0, 0)                # sentinel for start
 
-            # Now len(downs) == len(ups)
             for d, u in zip(downs, ups):
                 if d <= u:
-                    mask[d : u + 1] = True
-                else:
-                    mask[u : d + 1] = True
+                    mask[d:u] = True                          # [d, u)
+                else:                                         # out-of-order safety
+                    mask[u:d] = True
 
-        # build stance/swing masks
-        fill_mask(left_stance,  ld_idx, lu_idx)
-        fill_mask(right_stance, rd_idx, ru_idx)
+        # build stance masks
+        fill_mask(left_stance,  ld, lu)
+        fill_mask(right_stance, rd, ru)
 
-        # ---------------------- assign colours ------------------------------------
-        # green = stance, blue = swing
-        landmark_colors[left_stance,  L_ANK] = [0, 255,   0]
-        landmark_colors[~left_stance, L_ANK] = [0,   0, 255]
-        landmark_colors[right_stance, R_ANK] = [0, 255,   0]
-        landmark_colors[~right_stance,R_ANK] = [0,   0, 255]
+        # --------------------------------------------------- colour the two ankles
+        landmark_colors[left_stance,  L_ANK] = [0, 255,   0]   # left stance  – green
+        landmark_colors[~left_stance, L_ANK] = [0,   0, 255]   # left swing   – blue
+        landmark_colors[right_stance, R_ANK] = [0, 255,   0]   # right stance – green
+        landmark_colors[~right_stance, R_ANK] = [0,   0, 255]  # right swing  – blue
 
         return landmark_colors
 
