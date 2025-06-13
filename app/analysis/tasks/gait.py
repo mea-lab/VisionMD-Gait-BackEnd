@@ -33,37 +33,35 @@ class GaitTask(BaseTask):
     LANDMARKS = np.array(['htop', 'neck', 'rsho', 'relb', 'rwri', 'lsho',
                             'lelb', 'lwri', 'rhip', 'rkne', 'rank', 'lhip', 
                             'lkne', 'lank', 'pelv', 'spin', 'head'])
-
-    gait_phase_joint_order = ['pelv', 'rhip', 'rkne', 'rank', 'lhip', 'lkne', 
-                    'lank', 'spin', 'neck', 'head', 'htop', 'lsho', 
-                    'lelb', 'lwri', 'rsho', 'relb', 'rwri']
         
     # Properties are set via prepare_video_parameters.
-    original_bounding_box = None
-    enlarged_bounding_box = None
     video = None
+    video_id = None
+    file_path = None
+    file_name = None
+    task_name = None
+
     fps = None
     start_time = None
     start_frame_idx = None
     end_time = None
     end_frame_idx = None
-    file_path = None
+
     focal_length = None
     height_cm = None
-    task_name = None
 
-    skeleton = 'mpi_inf_3dhp_17'
+    original_bounding_box = None
+    enlarged_bounding_box = None
 
     _metrabs_detector = None
     _gait_phase_transformer = None
+    skeleton = 'mpi_inf_3dhp_17'
     _metrabs_joint_order = np.array(['htop', 'neck', 'rsho', 'relb', 'rwri', 'lsho',
                             'lelb', 'lwri', 'rhip', 'rkne', 'rank', 'lhip', 
                             'lkne', 'lank', 'pelv', 'spin', 'head'])
-    
     _gait_phase_joint_order = ['pelv', 'rhip', 'rkne', 'rank', 'lhip', 'lkne', 
                             'lank', 'spin', 'neck', 'head', 'htop', 'lsho', 
                             'lelb', 'lwri', 'rsho', 'relb', 'rwri']
-    
     _gait_phase_order_idx = None
     # ------------------------------------------------------------------
     # --- END: Abstract properties definitions
@@ -87,16 +85,19 @@ class GaitTask(BaseTask):
             # 2) Getting detector and using detector to get landmarks
             with tf.device('/CPU:0'):
                 detector = self.get_detector()
-            landmarks = self.extract_landmarks(detector)    
+            landmarks, landmarks_mirrored = self.extract_landmarks(detector)    
             tf.keras.backend.clear_session()
             context().clear_kernel_cache()
 
             # 2) Getting signals
             phases, strides, signals = self.calculate_signal(landmarks['poses3d'], self.height_cm * 10)
+            phases_mirrored, strides_mirrored, signals_mirrored = self.calculate_signal(landmarks_mirrored['poses3d'], self.height_cm * 10)
 
             # 3) Get signal analyzer to use it to get feature results
             signal_analyzer = self.get_signal_analyzer()
             results, gait_event_dic = signal_analyzer.analyze(phases, strides, landmarks['poses3d'], self.fps)
+            results_mirrored, gait_event_dic_mirrored = signal_analyzer.analyze(phases_mirrored, strides_mirrored, landmarks_mirrored['poses3d'], self.fps)
+            avg_results = self.calculate_average_features(results, results_mirrored)
 
             del GaitTask._gait_phase_transformer, signal_analyzer
             GaitTask._gait_phase_transformer, signal_analyzer = None, None
@@ -107,29 +108,31 @@ class GaitTask(BaseTask):
             landmark_colors = self.calculate_landmark_colors(landmarks['poses3d'], gait_event_dic, self.fps)
 
             # 4) Build up response to API call
-            results['signals'] = signals
-            results['landMarks'] = landmarks['poses2d'].tolist()
-            results['poses3D'] = landmarks['poses3d'].tolist()
-            results['landmark_colors'] = landmark_colors.tolist()
-            results['gait_event_dic'] = {
+            response = {}
+            response['File name'] = self.file_name
+            response['Task name'] = self.task_name
+            response = response | avg_results
+            response['signals'] = signals
+            response['landMarks'] = landmarks['poses2d'].tolist()
+            response['landMarks_3D'] = landmarks['poses3d'].tolist()
+            response['gait_event_dic'] = {
                 k: v.tolist()
                 for k, v in gait_event_dic.items()
             }
-            results['Task name'] = self.task_name
+            response['landmark_colors'] = landmark_colors.tolist()
 
             # 5) Clean up memory
             if self.video:
                 self.video.release()
-            if os.path.exists(self.file_path):
-                os.remove(self.file_path)
             tf.keras.backend.clear_session()
             context().clear_kernel_cache()
         except Exception as e:
             return Response(f"Error with gait analysis: {str(e)}", status=500)
 
-        return results
+        return response
 
     
+
     def prepare_video_parameters(self, request):
         """
         Prepares video parameters from the HTTP request:
@@ -140,20 +143,36 @@ class GaitTask(BaseTask):
         Returns a dictionary of parameters. 
         MUST DEFINE ALL ABSTRACT PROPERTIES. 
         """
-        APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+        # Get all variables set up and check if folder and file paths exist
+        video_id = request.GET.get('id', None)
+        if not video_id:
+            raise Exception("Video project id not provided.")
+        
         try:
             json_data = json.loads(request.POST['json_data'])
-            if 'video' not in request.FILES or len(request.FILES) == 0:
-                raise Exception("'video' field missing or no files uploaded")
         except (KeyError, json.JSONDecodeError):
             raise Exception("Invalid or missing 'json_data' in POST data")
-    
-        file_name = f"{uuid.uuid4().hex[:15].upper()}.mp4"
-        task_name = f"{json_data['task_name']}_{json_data['id']}"
 
-        folder_path = os.path.join(APP_ROOT, '../video_uploads')
-        file_path = os.path.join(folder_path, file_name)
-        FileSystemStorage(folder_path).save(file_name, request.FILES['video'])
+        folder_path = os.path.join(settings.MEDIA_ROOT, "video_uploads")
+        project_folder_path = os.path.join(folder_path, video_id)
+        if not os.path.isdir(project_folder_path):
+            raise Exception("Video project folder does not exist.")
+        
+        subfolder_path = os.path.join(folder_path, video_id)
+        metadata = {}
+        if os.path.isdir(subfolder_path):
+            json_path = os.path.join(subfolder_path, "metadata.json")
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            except (IOError, json.JSONDecodeError):
+                print("Warning: Video project data cannot be decoded.")
+                return Response({}, status=404)
+                    
+    
+        file_name = metadata["metadata"]["video_name"]
+        file_path = os.path.join(settings.MEDIA_ROOT, "video_uploads", video_id, file_name)
+        task_name = f"{json_data['task_name']}_{json_data['id']}"
     
         video = cv2.VideoCapture(file_path)
         video_width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -188,6 +207,7 @@ class GaitTask(BaseTask):
         #Set all necessary class attributes
         self.video = video
         self.file_path = file_path
+        self.file_name = file_name
         self.original_bounding_box = original_bounding_box
         self.enlarged_bounding_box = enlarged_bounding_box
         self.start_time = start_time
@@ -201,6 +221,7 @@ class GaitTask(BaseTask):
 
         return {
             "video": video,
+            "file_name": file_name,
             "file_path": file_path,
             "original_bounding_box": original_bounding_box,
             "enlarged_bounding_box": enlarged_bounding_box,
@@ -211,6 +232,7 @@ class GaitTask(BaseTask):
             "focal_length": focal_length,
             "height_cm": height_cm,
         }
+
 
 
     def get_detector(self) -> object:
@@ -237,16 +259,17 @@ class GaitTask(BaseTask):
             return GaitTask._metrabs_detector
 
 
+
     def get_signal_analyzer(self) -> object:
         """
         Getter for the signal analyzer used by the task
 
         Returns an instance of the signal analyze using the analyzer classes
         """
-        # return None
         return GaitSignalAnalyzer()
 
     
+
     def calculate_signal(self, poses3D, height_mm, L=60, pos_divider=2) -> dict:
         """
         Processes 3D keypoints using the gait transformer model and returns phases, strides.
@@ -305,20 +328,21 @@ class GaitTask(BaseTask):
         signals = {key: [float(v) for v in value] for key, value in signals.items()}
         return phases, strides, signals
 
+
+
+
     def extract_landmarks(self, detector=None) -> tuple:
         """
         Process video frames between start_frame and end_frame and extract hand landmarks 
-        for the left hand from each frame.
-        
-        Returns:
-            tuple: (essential_landmarks, all_landmarks)
-            - essential_landmarks: a list of lists where each inner list contains the key landmark coordinates for that frame.
-            - all_landmarks: a list of lists containing all the landmark coordinates for that frame.
-        """
-        # Setting video related variables
-        file_path = self.file_path
-        if not os.path.isfile(file_path): raise Exception("Error: File path is not a video")
+        for the left hand from each frame — both normal and horizontally mirrored versions.
 
+        Returns:
+            tuple: (all_preds, mirrored_all_preds)
+                - all_preds: dict with keys "poses2d", "poses3d", "boxes" for the normal frames
+                - mirrored_all_preds: dict with keys "poses2d", "poses3d", "boxes" for the mirrored frames
+        """
+        # --- [setup unchanged from your original method] ---
+        file_path = self.file_path
         file_name = os.path.splitext(os.path.basename(file_path))[0]
         start_frame = self.start_frame_idx
         end_frame = self.end_frame_idx
@@ -327,41 +351,35 @@ class GaitTask(BaseTask):
         height_cm = self.height_cm
         enlarged_bounding_box = self.enlarged_bounding_box
 
-        # Setting variables for loop that processes frames
-        poses2d_lists = []
-        poses3d_lists = []
-        boxes_lists = []
+        poses2d_lists, poses3d_lists, boxes_lists = [], [], []
+        poses2d_lists_mirr, poses3d_lists_mirr, boxes_lists_mirr = [], [], []
         missing_mask = []
         multiple_people_detected = False
-        raw_frame_idx = start_frame
-        stop = False
-        batch_size = 16
 
-        #Setting variables for cropping and resizing 
+        # camera intrinsics compute (unchanged)
         cap = cv2.VideoCapture(file_path)
         orig_width  = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         orig_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         cap.release()
-
         diag_35x24mm = (36**2 + 24**2) ** 0.5
-        w_px, h_px = orig_width, orig_height
-        diag_px   = (w_px**2 + h_px**2) ** 0.5
+        diag_px = (orig_width**2 + orig_height**2)**0.5
+        fx = fy = focal_length_equivalent * (diag_px / diag_35x24mm)
+        cx, cy = orig_width/2.0, orig_height/2.0
+        K_full = np.array([[fx, 0, cx],
+                        [0, fy, cy],
+                        [0,  0,  1]], dtype=np.float32)
+        K_tensor = tf.convert_to_tensor(K_full, dtype=tf.float32)
+        x1, y1 = enlarged_bounding_box['x'], enlarged_bounding_box['y']
 
-        fx = focal_length_equivalent * (diag_px / diag_35x24mm)
-        fy = focal_length_equivalent * (diag_px / diag_35x24mm)
-        cx = orig_width  / 2.0
-        cy = orig_height / 2.0
-        K_full = np.array([[fx,  0, cx],
-                           [ 0, fy, cy],
-                           [ 0,  0,  1]], dtype=np.float32)
-        x1 = enlarged_bounding_box['x']
-        y1 = enlarged_bounding_box['y']
-        K_tensor = tf.convert_to_tensor(K_full,dtype=tf.float32)
-
-        # Start reading in batches for the video and processing them
+        # reader
+        batch_size = 16
         vid = self.video_reader(file_path, batch_size, start_frame)
+        raw_frame_idx = start_frame
+        stop = False
+
         for frame_batch in tqdm(vid, desc=f"Processing {file_name}"):
-            resized_cropped_frame_batch = []
+            # collect just the frames in the desired [start_frame, end_frame] range
+            cropped = []
             for frame in frame_batch:
                 if raw_frame_idx < start_frame:
                     raw_frame_idx += 1
@@ -369,26 +387,32 @@ class GaitTask(BaseTask):
                 if raw_frame_idx > end_frame:
                     stop = True
                     break
-                resized_cropped_frame_batch.append(frame)
+                cropped.append(frame)
                 raw_frame_idx += 1
+            if stop and not cropped:
+                break
+            if not cropped:
+                continue
 
-            
-            if not resized_cropped_frame_batch:
-                # After end frame idx
-                if stop:
-                    break
-                # Before start frame idx
-                else:
-                    continue
-
-            # Prepare batch tensor for model
-            batch_tensor = tf.convert_to_tensor(np.stack(resized_cropped_frame_batch), dtype=tf.uint8)
+            # --- Prepare tensors for BOTH original and mirrored batches ---
+            batch_np = np.stack(cropped)             # shape (n, H, W, C), uint8
+            batch_tensor = tf.convert_to_tensor(batch_np, dtype=tf.uint8)
+            # mirror via TensorFlow
+            batch_tensor_mirr = tf.image.flip_left_right(batch_tensor)
             n = tf.shape(batch_tensor)[0]
             K_batch = tf.tile(tf.expand_dims(K_tensor, 0), [n,1,1])
 
+            # run detector on original
             if focal_length_equivalent != -1:
                 pred = GaitTask._metrabs_detector.detect_poses_batched(
                     images=batch_tensor,
+                    intrinsic_matrix=K_batch,
+                    skeleton=self.skeleton,
+                    detector_flip_aug=True,
+                    detector_threshold=0.2,
+                )
+                pred_mirr = GaitTask._metrabs_detector.detect_poses_batched(
+                    images=batch_tensor_mirr,
                     intrinsic_matrix=K_batch,
                     skeleton=self.skeleton,
                     detector_flip_aug=True,
@@ -401,51 +425,79 @@ class GaitTask(BaseTask):
                     detector_flip_aug=True,
                     detector_threshold=0.2,
                 )
+                pred_mirr = GaitTask._metrabs_detector.detect_poses_batched(
+                    images=batch_tensor_mirr,
+                    skeleton=self.skeleton,
+                    detector_flip_aug=True,
+                    detector_threshold=0.2,
+                )
 
-            for j in range(len(resized_cropped_frame_batch)):
+            # --- Accumulate both original and mirrored detections ---
+            for j in range(n):
+                # ORIGINAL
                 if pred["poses2d"][j].shape[0] > 0:
+                    poses2d_lists.append(pred["poses2d"][j:j+1, 0:1].numpy())
+                    poses3d_lists.append(pred["poses3d"][j:j+1, 0:1].numpy())
+                    boxes_lists.append(pred["boxes"][j:j+1, 0:1].numpy())
                     missing = False
-                    poses2d_lists.append(pred["poses2d"][j:j+1, 0:1, ...].numpy())
-                    poses3d_lists.append(pred["poses3d"][j:j+1, 0:1, ...].numpy())
-                    boxes_lists.append(pred["boxes"][j:j+1, 0:1, ...].numpy())
                 else:
+                    # fill NaNs
+                    poses2d_lists.append(np.full([1,1,17,2], np.nan, np.float16))
+                    poses3d_lists.append(np.full([1,1,17,3], np.nan, np.float16))
+                    boxes_lists.append(np.full([1,1,5],    np.nan, np.float16))
                     missing = True
-                    poses2d_lists.append(np.full([1, 1, 17, 2], np.nan, dtype=np.float16))
-                    poses3d_lists.append(np.full([1, 1, 17, 3], np.nan, dtype=np.float16))
-                    boxes_lists.append(np.full([1, 1, 5], np.nan, dtype=np.float16))
-
                 missing_mask.append(missing)
                 if pred["poses2d"][j].shape[0] > 1:
                     multiple_people_detected = True
 
-            del pred, batch_tensor
+                # MIRRORED
+                if pred_mirr["poses2d"][j].shape[0] > 0:
+                    poses2d_lists_mirr.append(pred_mirr["poses2d"][j:j+1, 0:1].numpy())
+                    poses3d_lists_mirr.append(pred_mirr["poses3d"][j:j+1, 0:1].numpy())
+                    boxes_lists_mirr.append(pred_mirr["boxes"][j:j+1, 0:1].numpy())
+                else:
+                    poses2d_lists_mirr.append(np.full([1,1,17,2], np.nan, np.float16))
+                    poses3d_lists_mirr.append(np.full([1,1,17,3], np.nan, np.float16))
+                    boxes_lists_mirr.append(np.full([1,1,5],    np.nan, np.float16))
 
-        # Complete loop, interpolate missing poses and fix incorrectly swapped poses
+            del pred, pred_mirr, batch_tensor, batch_tensor_mirr
+
+        # --- Post‐processing for ORIGINAL ---
         all_poses2d = np.concatenate(poses2d_lists, axis=0)[:,0,:,:]
-        all_poses2d[..., 0] -= x1
-        all_poses2d[..., 1] -= y1
-
+        all_poses2d[...,0] -= x1
+        all_poses2d[...,1] -= y1
         all_poses3d = np.concatenate(poses3d_lists, axis=0)[:,0,:,:]
-        all_boxes = np.concatenate(boxes_lists, axis=0)
+        all_boxes  = np.concatenate(boxes_lists, axis=0)
         missing_mask = np.array(missing_mask)
+        interp2d = self.interpolate_missing_poses(all_poses2d, missing_mask)
+        interp3d = self.interpolate_missing_poses(all_poses3d, missing_mask)
+        corr3d   = self.correct_left_right_swapping(interp3d)
+        all_preds = {"poses2d": interp2d, "poses3d": corr3d, "boxes": all_boxes}
 
-        interpolated_poses3D = self.interpolate_missing_poses(all_poses3d, missing_mask)
-        interpolated_poses2D = self.interpolate_missing_poses(all_poses2d, missing_mask)
-        corrected_poses3D = self.correct_left_right_swapping(interpolated_poses3D)
-
-        all_preds = {            
-            "poses2d": interpolated_poses2D,
-            "poses3d": corrected_poses3D,
-            "boxes"  : all_boxes,
+        # --- Post‐processing for MIRRORED (same pipeline) ---
+        mir_poses2d = np.concatenate(poses2d_lists_mirr, axis=0)[:,0,:,:]
+        mir_poses2d[...,0] -= x1  # same subtraction
+        mir_poses2d[...,1] -= y1
+        mir_poses3d = np.concatenate(poses3d_lists_mirr, axis=0)[:,0,:,:]
+        mir_boxes   = np.concatenate(boxes_lists_mirr, axis=0)
+        mir_interp2d = self.interpolate_missing_poses(mir_poses2d, missing_mask)
+        mir_interp3d = self.interpolate_missing_poses(mir_poses3d, missing_mask)
+        mir_corr3d   = self.correct_left_right_swapping(mir_interp3d)
+        mirrored_all_preds = {
+            "poses2d": mir_interp2d,
+            "poses3d": mir_corr3d,
+            "boxes":   mir_boxes
         }
 
-        # Post‐processing warnings
+        # --- warnings & return ---
         if multiple_people_detected:
             print(f"Warning: {file_name} had multiple people in some frames.")
-        if sum(missing_mask) > 0:
-            print(f"Warning: {sum(missing_mask)} frames found no person, saved under undetected dir.")
+        if missing_mask.sum() > 0:
+            print(f"Warning: {missing_mask.sum()} frames found no person, saved under undetected dir.")
         print(f"Completed processing {file_name}")
-        return all_preds
+
+        return all_preds, mirrored_all_preds
+
 
 
     def calculate_normalization_factor(self, essential_landmarks) -> float:
@@ -455,60 +507,61 @@ class GaitTask(BaseTask):
         return None
     
 
-    def calculate_landmark_colors(self, poses_3D, gait_event_dic, fps) -> np.ndarray:
+
+    def calculate_landmark_colors(self, poses_3D, gait_event_dic, fps=None):
         """
-        Build an (n_frames, n_joints, 3) uint8 array of RGB colours.
+        Colour the left/right ankles green during stance and blue during swing.
         """
+        import numpy as np
+
+        # ------------------------------------------------------------------ helpers
+        def to_idx(arr):
+            """Floor to int and keep inside [0, n_frames-1]."""
+            return np.clip(np.floor(arr).astype(int), 0, n_frames - 1)
+
+        def stance_mask(downs, ups):
+            """Build stance Boolean mask with no ordering assumptions."""
+            ev = [(int(t), 'd') for t in downs] + [(int(t), 'u') for t in ups]
+            ev.sort(key=lambda x: x[0])
+
+            mask = np.zeros(n_frames, dtype=bool)
+            in_stance = bool(ev and ev[0][1] == 'u')   # already in stance if first is 'up'
+            last_t = 0
+            for t, kind in ev:
+                t = np.clip(t, 0, n_frames)
+                if in_stance:
+                    mask[last_t:t] = True               # fill stance interval
+                in_stance = (kind == 'd')               # flip state
+                last_t = t
+            if in_stance:
+                mask[last_t:] = True
+            return mask
+        # --------------------------------------------------------------------------
+
         n_frames, n_joints = poses_3D.shape[:2]
         landmark_colors = np.full((n_frames, n_joints, 3), [255, 0, 0], dtype=np.uint8)
 
-        # indices of the two ankles in the plotting order
-        try:
-            L_ANK = int(np.where(self._metrabs_joint_order == "lank")[0][0])
-            R_ANK = int(np.where(self._metrabs_joint_order == "rank")[0][0])
-        except ValueError as e:
-            raise ValueError("Missing 'lank' or 'rank' in _metrabs_joint_order") from e
+        # joint indices in your Metrabs order
+        L_ANK = int(np.where(self._metrabs_joint_order == "lank")[0][0])
+        R_ANK = int(np.where(self._metrabs_joint_order == "rank")[0][0])
 
-        left_stance  = np.zeros(n_frames, dtype=bool)
-        right_stance = np.zeros(n_frames, dtype=bool)
+        # convert lists → int frame indices
+        ld = to_idx(gait_event_dic.get('left_down',  []))
+        lu = to_idx(gait_event_dic.get('left_up',    []))
+        rd = to_idx(gait_event_dic.get('right_down', []))
+        ru = to_idx(gait_event_dic.get('right_up',   []))
 
-        # helper – convert list-like input to *floored* int indices inside range
-        def to_frame_indices(arr):
-            arr = np.asarray(arr, dtype=float)
-            idx = np.floor(arr).astype(int)          # floor, don’t round
-            return np.clip(idx, 0, n_frames - 1)
+        # stance masks
+        left_stance  = stance_mask(ld, lu)
+        right_stance = stance_mask(rd, ru)
 
-        # sanitise event arrays
-        ld = to_frame_indices(gait_event_dic.get("left_down",  []))
-        lu = to_frame_indices(gait_event_dic.get("left_up",    []))
-        rd = to_frame_indices(gait_event_dic.get("right_down", []))
-        ru = to_frame_indices(gait_event_dic.get("right_up",   []))
-
-        def fill_mask(mask: np.ndarray, downs: np.ndarray, ups: np.ndarray):
-            if len(downs) > len(ups):                         # trailing stance
-                ups = np.append(ups, n_frames)                # sentinel for end
-            elif len(ups) > len(downs):                       # leading stance
-                downs = np.insert(downs, 0, 0)                # sentinel for start
-
-            for d, u in zip(downs, ups):
-                if d <= u:
-                    mask[d:u] = True                          # [d, u)
-                else:                                         # out-of-order safety
-                    mask[u:d] = True
-
-        # build stance masks
-        fill_mask(left_stance,  ld, lu)
-        fill_mask(right_stance, rd, ru)
-
-        # --------------------------------------------------- colour the two ankles
-        landmark_colors[left_stance,  L_ANK] = [0, 255,   0]   # left stance  – green
-        landmark_colors[~left_stance, L_ANK] = [0,   0, 255]   # left swing   – blue
-        landmark_colors[right_stance, R_ANK] = [0, 255,   0]   # right stance – green
-        landmark_colors[~right_stance, R_ANK] = [0,   0, 255]  # right swing  – blue
+        # colour ankles
+        landmark_colors[left_stance,  L_ANK] = [0, 255,   0]   # stance  – green
+        landmark_colors[~left_stance, L_ANK] = [0,   0, 255]   # swing   – blue
+        landmark_colors[right_stance, R_ANK] = [0, 255,   0]
+        landmark_colors[~right_stance, R_ANK] = [0,   0, 255]
 
         return landmark_colors
-
-
     # -------------------------------------------------------------
     # --- END: Abstract methods definitions
     # -------------------------------------------------------------
@@ -520,6 +573,32 @@ class GaitTask(BaseTask):
     # -------------------------------------------------------------
     # --- START: Custom helper methods definitions
     # -------------------------------------------------------------
+
+    # ----- Function for calculating color of landmarks -----
+
+
+    # ----- Function for calculating the averages features of original and mirrored videos
+    def calculate_average_features(self, original_features, mirrored_features):
+        average = {
+            "Average stance time": (original_features["Average stance time"] + mirrored_features["Average stance time"]) / 2.0,
+            "Average swing time": (original_features["Average swing time"] + mirrored_features["Average swing time"]) / 2.0,
+            "Average double support time": (original_features["Average double support time"] + mirrored_features["Average double support time"]) / 2.0,
+            "Average step time": (original_features["Average step time"] + mirrored_features["Average step time"]) / 2.0,
+            "Average step length": (original_features["Average step length"] + mirrored_features["Average step length"]) / 2.0,
+            "Average velocity": (original_features["Average velocity"] + mirrored_features["Average velocity"]) / 2.0,
+            "Average cadence": (original_features["Average cadence"] + mirrored_features["Average cadence"]) / 2.0,
+            "Average stance time left": (original_features["Average stance time left"] + mirrored_features["Average stance time right"]) / 2.0,
+            "Average stance time right": (original_features["Average stance time right"] + mirrored_features["Average stance time left"]) / 2.0,
+            "Average swing time left": (original_features["Average swing time left"] + mirrored_features["Average swing time right"]) / 2.0,
+            "Average swing time right": (original_features["Average swing time right"] + mirrored_features["Average swing time left"]) / 2.0,
+            "Average step time left": (original_features["Average step time left"] + mirrored_features["Average step time right"]) / 2.0,
+            "Average step time right": (original_features["Average step time right"] + mirrored_features["Average step time left"]) / 2.0,
+            "Average step length left": (original_features["Average step length left"] + mirrored_features["Average step length right"]) / 2.0,
+            "Average step length right": (original_features["Average step length right"] + mirrored_features["Average step length left"]) / 2.0,
+            "Arm swing correlation": (original_features["Arm swing correlation"] + mirrored_features["Arm swing correlation"]) / 2.0,
+        }
+                
+        return average
     
     ### ----- Function for interpolating missing poses -----
     def interpolate_missing_poses(self, poses: np.ndarray, missing_mask: np.ndarray) -> np.ndarray:

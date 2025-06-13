@@ -27,24 +27,30 @@ class BaseTask(ABC):
         """
         pass
 
-
-    @property
-    @abstractmethod
-    def original_bounding_box(self):
-        pass
-
-
-    @property
-    @abstractmethod
-    def enlarged_bounding_box(self):
-        pass
-
-
     @property
     @abstractmethod
     def video(self):
         pass
 
+    @property
+    @abstractmethod
+    def video_id(self):
+        pass
+
+    @property
+    @abstractmethod
+    def file_path(self):
+        pass
+
+    @property
+    @abstractmethod
+    def file_name(self):
+        pass
+
+    @property
+    @abstractmethod
+    def task_name(self):
+        pass
     
     @property
     @abstractmethod
@@ -72,6 +78,17 @@ class BaseTask(ABC):
     @property
     @abstractmethod
     def end_frame_idx(self):
+        pass
+
+    @property
+    @abstractmethod
+    def original_bounding_box(self):
+        pass
+
+
+    @property
+    @abstractmethod
+    def enlarged_bounding_box(self):
         pass
     # ----------------------------------------------------------------
     # --- END: Abstract properties to be implemented by subclasses ---

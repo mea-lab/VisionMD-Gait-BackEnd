@@ -212,7 +212,7 @@ class GaitSignalAnalyzer(BaseSignalAnalyzer):
 
         results = {
             "Average stance time":           float(avg_stance),
-            "Average swingtime":             float(avg_swing),
+            "Average swing time":             float(avg_swing),
             "Average double support time":   float(avg_double),
             "Average step time":             float(avg_steptime),
             "Average step length":           float(all_step_lengths.mean()),
