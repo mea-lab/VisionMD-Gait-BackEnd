@@ -102,3 +102,5 @@ db.sqlite3
 /VisionMD
 video_uploads/
 metrabs_local_s/
+__pycache__
+*:Zone.Identifier
