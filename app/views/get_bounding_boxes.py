@@ -17,13 +17,13 @@ def get_bounding_boxes(request):
 
     folder_path = os.path.join(settings.MEDIA_ROOT, "video_uploads")
     project_folder_path = os.path.join(folder_path, video_id)
+    bounding_boxes_path = os.path.join(project_folder_path, 'boundingBoxes.json')
     if not os.path.isdir(project_folder_path):
         return Response("Video project folder does not exist.", status=400)
 
     metadata_file_path = os.path.join(project_folder_path, "metadata.json")
     if not os.path.isfile(metadata_file_path):
         return Response("Video project metadata does not exist.", status=400)
-    
 
 
     # Get video path
@@ -49,7 +49,6 @@ def get_bounding_boxes(request):
         print("Analysis done in %s seconds" % (time.time() - start_time))
 
         # 3) Dump bounding boxes to json
-        bounding_boxes_path = os.path.join(project_folder_path, 'boundingBoxes.json')
         bounding_boxes_wrapped = {
             "boundingBoxes": result['boundingBoxes']
         }

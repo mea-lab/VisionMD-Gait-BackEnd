@@ -21,8 +21,8 @@ tf.keras.mixed_precision.set_global_policy('mixed_float16')
 class AppConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = "app"
-    print("App config running  to configure tensorflow")
-    print("Built with CUDA: ", tf.test.is_built_with_cuda())
+    print("Tensorflow built with CUDA: ", tf.test.is_built_with_cuda())
+    print("GPUs available:", tf.config.list_physical_devices('GPU'))
 
     def ready(self):
         os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'

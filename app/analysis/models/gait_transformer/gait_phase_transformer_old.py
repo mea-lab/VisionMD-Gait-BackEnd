@@ -330,7 +330,7 @@ def get_gait_phase_stride_transformer(
     encoded_demographics = layers.Dense(units=projection_dim, name="demographics_embedding")(flat_demographics)
 
     # and create a corresponding encoding layer
-    demographics_encoding = tf.reshape(layers.Embedding(1, projection_dim)(tf.range(10)), [10, projection_dim])
+    demographics_encoding = tf.reshape(layers.Embedding(10, projection_dim)(tf.range(10)), [10, projection_dim])
     demographics_encoding = tf.expand_dims(demographics_encoding, axis=0)
 
     # concatenate joints into 1 dimension and then project into the embedding dimension. this produces a
