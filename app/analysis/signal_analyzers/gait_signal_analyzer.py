@@ -99,6 +99,9 @@ class GaitSignalAnalyzer(BaseSignalAnalyzer):
         rhs = np.asarray(gait_event_dic['right_down'],  dtype=float)
         rtf = np.asarray(gait_event_dic['right_up'],    dtype=float)
 
+        if len(lhs) == 0 or len(ltf) == 0 or len(rhs) == 0 or len(rtf) == 0:
+            raise ValueError("Provided clip was too short, no gait events were detected to compute features.")
+
         # --- 2) Temporal phases (in frames) ---
         
         # Calculate swing times

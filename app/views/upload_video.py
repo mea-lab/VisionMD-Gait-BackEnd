@@ -64,12 +64,6 @@ def upload_video(request):
 
     # 8a) Read the very first frame (frame index 0)
     ret, frame = cap.read()
-    if not ret or frame is None:
-        cap.release()
-        return Response(
-            {"detail": "Unable to read the first frame from the video."},
-            status=400
-        )
 
     # 8b) Get the FPS
     fps = cap.get(cv2.CAP_PROP_FPS)
