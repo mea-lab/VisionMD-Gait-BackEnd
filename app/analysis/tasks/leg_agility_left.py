@@ -4,9 +4,7 @@ import mediapipe as mp
 import numpy as np
 import os, uuid, time, json, traceback
 from django.core.files.storage import FileSystemStorage
-from multiprocessing import Pool, cpu_count
 from django.conf import settings
-
 
 from .base_task import BaseTask
 from app.analysis.detectors.mp_poseheavy_detector import PoseHeavyDetector
@@ -72,12 +70,8 @@ class LegAgilityLeftTask(BaseTask):
             signal_analyzer = self.get_signal_analyzer()
 
             # 4) Extract landmarks using the defined detector
-            with Pool(processes=max(1, cpu_count() // 2)) as pool:
-                result = pool.apply(
-                    LegAgilityLeftTask.extract_landmarks,
-                    args=(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
-                )
-                essential_landmarks, all_landmarks = result
+            result = LegAgilityLeftTask.extract_landmarks(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
+            essential_landmarks, all_landmarks = result
 
             # 5) Compute normalization factor.
             normalization_factor = self.calculate_normalization_factor(essential_landmarks)

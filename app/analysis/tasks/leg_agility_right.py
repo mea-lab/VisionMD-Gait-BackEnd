@@ -3,7 +3,6 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import os, uuid, time, json, traceback
-from multiprocessing import Pool, cpu_count
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 
@@ -71,12 +70,8 @@ class LegAgilityRightTask(BaseTask):
             signal_analyzer = self.get_signal_analyzer()
 
             # 4) Extract landmarks using the defined detector
-            with Pool(processes=max(1, cpu_count() // 2)) as pool:
-                result = pool.apply(
-                    LegAgilityRightTask.extract_landmarks,
-                    args=(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
-                )
-                essential_landmarks, all_landmarks = result
+            result = LegAgilityRightTask.extract_landmarks(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
+            essential_landmarks, all_landmarks = result
 
             normalization_factor = self.calculate_normalization_factor(essential_landmarks)
             raw_signal = self.calculate_signal(essential_landmarks)

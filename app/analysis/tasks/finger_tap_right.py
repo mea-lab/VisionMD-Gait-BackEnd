@@ -6,7 +6,6 @@ import uuid
 import mediapipe as mp
 import numpy as np
 import traceback
-from multiprocessing import Pool, cpu_count
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 
@@ -80,12 +79,8 @@ class FingerTapRightTask(BaseTask):
         try:
             self.prepare_video_parameters(request)
             signal_analyzer = self.get_signal_analyzer()
-            with Pool(processes=max(1, cpu_count() // 2)) as pool:
-                result = pool.apply(
-                    FingerTapRightTask.extract_landmarks,
-                    args=(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
-                )
-                essential_landmarks, all_landmarks = result
+            result = FingerTapRightTask.extract_landmarks(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
+            essential_landmarks, all_landmarks = result
             normalization_factor = self.calculate_normalization_factor(essential_landmarks)
             raw_signal = self.calculate_signal(essential_landmarks)
         

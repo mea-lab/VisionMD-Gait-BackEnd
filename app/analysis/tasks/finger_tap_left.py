@@ -6,7 +6,6 @@ import uuid
 import mediapipe as mp
 import numpy as np
 import traceback
-from multiprocessing import Pool, cpu_count
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 
@@ -86,12 +85,8 @@ class FingerTapLeftTask(BaseTask):
             signal_analyzer = self.get_signal_analyzer()
 
             # 4) Extract landmarks using the defined detector
-            with Pool(processes=max(1, cpu_count() // 2)) as pool:
-                result = pool.apply(
-                    FingerTapLeftTask.extract_landmarks,
-                    args=(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
-                )
-                essential_landmarks, all_landmarks = result
+            result = FingerTapLeftTask.extract_landmarks(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
+            essential_landmarks, all_landmarks = result
 
             
             # 5) Calculate the signal using the land marks
