@@ -22,8 +22,8 @@ def create_yolo_detector(model_path="yolov8s.pt", device='cpu'):
 
 def yolo_tracker(file_path, model_path="yolov8s.pt", device='cpu'):
     """
-    Similar to your old YOLOTracker(...) code, but placed in 'yolo_detectors.py'.
-    Runs YOLOv8 tracking and returns bounding boxes (every 10 frames).
+    Runs YOLOv8 tracking and returns bounding boxes (every 10 frames),
+    remapping IDs to be consecutive.
     """
     # Determine device
     device = 'cuda' if torch.cuda.is_available() else device
@@ -38,6 +38,10 @@ def yolo_tracker(file_path, model_path="yolov8s.pt", device='cpu'):
     frameNumber = 0
     data = []  # store the last set of detections between frames
 
+    # Dictionary to remap original YOLO IDs to consecutive ones
+    id_map = {}
+    next_id = 1
+
     while cap.isOpened():
         success, frame = cap.read()
         if not success:
@@ -48,25 +52,34 @@ def yolo_tracker(file_path, model_path="yolov8s.pt", device='cpu'):
             results = model.track(
                 frame,
                 persist=True,
-                classes=[0],
+                classes=[0],  # class 0 = person
                 verbose=False,
                 device=device
             )
-            data = []  # reset data for these frames
+            data = []
 
             if (len(results) > 0 and
                 results[0].boxes is not None and
                 results[0].boxes.id is not None):
-                ind = results[0].boxes.id.cpu().numpy().astype(int)
-                box = results[0].boxes.xyxy.cpu().numpy().astype(int)
+                yolo_ids = results[0].boxes.id.cpu().numpy().astype(int)
+                boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
 
-                for i in range(len(ind)):
+                for i in range(len(yolo_ids)):
+                    original_id = int(yolo_ids[i])
+
+                    # Remap to consecutive ID
+                    if original_id not in id_map:
+                        id_map[original_id] = next_id
+                        next_id += 1
+
+                    mapped_id = id_map[original_id]
+
                     temp = {
-                        'id': int(ind[i]),
-                        'x': int(box[i][0]),
-                        'y': int(box[i][1]),
-                        'width': int(box[i][2] - box[i][0]),
-                        'height': int(box[i][3] - box[i][1]),
+                        'id': mapped_id,
+                        'x': int(boxes[i][0]),
+                        'y': int(boxes[i][1]),
+                        'width': int(boxes[i][2] - boxes[i][0]),
+                        'height': int(boxes[i][3] - boxes[i][1]),
                         'Subject': False
                     }
                     data.append(temp)
@@ -77,7 +90,7 @@ def yolo_tracker(file_path, model_path="yolov8s.pt", device='cpu'):
             }
             boundingBoxes.append(frameResults)
         else:
-            # For frames in-between, we repeat the last known data 
+            # Repeat last known data
             frameResults = {
                 'frameNumber': frameNumber,
                 'data': data
@@ -86,9 +99,5 @@ def yolo_tracker(file_path, model_path="yolov8s.pt", device='cpu'):
 
         frameNumber += 1
 
-    # Prepare final output
-    outputDictionary = {
-        'boundingBoxes': boundingBoxes
-    }
     cap.release()
-    return outputDictionary
+    return {'boundingBoxes': boundingBoxes}
