@@ -396,7 +396,7 @@ class GaitTask(BaseTask):
                 continue
 
             # --- Prepare tensors for BOTH original and mirrored batches ---
-            batch_np = np.stack(cropped)             # shape (n, H, W, C), uint8
+            batch_np = np.stack(cropped)
             batch_tensor = tf.convert_to_tensor(batch_np, dtype=tf.uint8)
             # mirror via TensorFlow
             batch_tensor_mirr = tf.image.flip_left_right(batch_tensor)
@@ -533,8 +533,8 @@ class GaitTask(BaseTask):
             for t, kind in ev:
                 t = np.clip(t, 0, n_frames)
                 if in_stance:
-                    mask[last_t:t] = True               # fill stance interval
-                in_stance = (kind == 'd')               # flip state
+                    mask[last_t:t] = True
+                in_stance = (kind == 'd')
                 last_t = t
             if in_stance:
                 mask[last_t:] = True
