@@ -79,8 +79,18 @@ class FingerTapRightTask(BaseTask):
         try:
             self.prepare_video_parameters(request)
             signal_analyzer = self.get_signal_analyzer()
-            result = FingerTapRightTask.extract_landmarks(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
+
+            result = FingerTapRightTask.extract_landmarks(
+                video_path=self.file_path, 
+                start_frame_idx=self.start_frame_idx,
+                end_frame_idx=self.end_frame_idx, 
+                fps=self.fps, 
+                enlarged_bounding_box=self.enlarged_bounding_box, 
+                original_bounding_box=self.original_bounding_box, 
+                LANDMARKS=self.LANDMARKS
+            )
             essential_landmarks, all_landmarks = result
+
             normalization_factor = self.calculate_normalization_factor(essential_landmarks)
             raw_signal = self.calculate_signal(essential_landmarks)
         
@@ -208,7 +218,7 @@ class FingerTapRightTask(BaseTask):
 
 
     @staticmethod
-    def extract_landmarks(video_path, start_frame_idx, end_frame_idx, fps, enlarged_bounding_box, LANDMARKS) -> tuple:
+    def extract_landmarks(video_path, start_frame_idx, end_frame_idx, fps, enlarged_bounding_box, original_bounding_box, LANDMARKS) -> tuple:
         """
         Processes video frames and extracts right hand landmarks.
         For each frame, retrieves thumb tip, index finger tip, middle finger tip, and wrist.
@@ -221,6 +231,12 @@ class FingerTapRightTask(BaseTask):
             enlarged_bounding_box['y'],
             enlarged_bounding_box['x'] + enlarged_bounding_box['width'],
             enlarged_bounding_box['y'] + enlarged_bounding_box['height']
+        )
+        original_coords = (
+            original_bounding_box['x'],
+            original_bounding_box['y'],
+            original_bounding_box['x'] + original_bounding_box['width'],
+            original_bounding_box['y'] + enlarged_bounding_box['height']
         )
         
         video = cv2.VideoCapture(video_path)
@@ -251,12 +267,12 @@ class FingerTapRightTask(BaseTask):
                 all_landmarks.append([])
             else:
                 hand_landmarks = detection_result.hand_landmarks[hand_index]
-                thumb = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["THUMB_TIP"]], enlarged_coords)
-                index_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["INDEX_FINGER_TIP"]], enlarged_coords)
-                middle_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["MIDDLE_FINGER_TIP"]], enlarged_coords)
-                wrist = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["WRIST"]], enlarged_coords)
+                thumb = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["THUMB_TIP"]], enlarged_coords, original_coords)
+                index_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["INDEX_FINGER_TIP"]], enlarged_coords, original_coords)
+                middle_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["MIDDLE_FINGER_TIP"]], enlarged_coords, original_coords)
+                wrist = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["WRIST"]], enlarged_coords, original_coords)
                 essential = [thumb, index_finger, middle_finger, wrist]
-                all_lms = BaseTask.get_all_landmarks_coord(hand_landmarks, enlarged_coords)
+                all_lms = BaseTask.get_all_landmarks_coord(hand_landmarks, enlarged_coords, original_coords)
                 essential_landmarks.append(essential)
                 all_landmarks.append(all_lms)
             

@@ -178,28 +178,30 @@ class BaseTask(ABC):
     # --- START: Utility functions as static methods ---
     # --------------------------------------------------
     @staticmethod
-    def get_landmark_coords(landmark, enlarged_coords):
+    def get_landmark_coords(landmark, enlarged_coords, original_coords):
         """
         Computes the (x, y) coordinates of a given landmark relative to the provided bounds.
         """
         x1, y1, x2, y2 = enlarged_coords
+        ox1, oy1, ox2, oy2 = original_coords
         return [
-            landmark.x * (x2 - x1),
-            landmark.y * (y2 - y1)
+            landmark.x * (x2 - x1) +  x1 - ox1,
+            landmark.y * (y2 - y1) +  y1 - oy1,
         ]
 
     @staticmethod
-    def get_all_landmarks_coord(landmarks, enlarged_coords):
+    def get_all_landmarks_coord(landmarks, enlarged_coords, original_coords):
         """
         Processes a list of landmarks and returns their (x, y, z) coordinates relative
         to the provided bounds.
         """
         x1, y1, x2, y2 = enlarged_coords
+        ox1, oy1, ox2, oy2 = original_coords
         coords = []
         for lm in landmarks:
             coords.append([
-                lm.x * (x2 - x1),
-                lm.y * (y2 - y1),
+                lm.x * (x2 - x1) + x1 - ox1,
+                lm.y * (y2 - y1) + y1 - oy1,
                 lm.z
             ])
         return coords

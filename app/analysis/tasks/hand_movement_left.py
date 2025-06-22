@@ -82,7 +82,15 @@ class HandMovementLeftTask(BaseTask):
             signal_analyzer = self.get_signal_analyzer()
 
             # 4) Extract landmarks using the defined detector
-            result = HandMovementLeftTask.extract_landmarks(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
+            result = HandMovementLeftTask.extract_landmarks(
+                video_path=self.file_path, 
+                start_frame_idx=self.start_frame_idx,
+                end_frame_idx=self.end_frame_idx, 
+                fps=self.fps, 
+                enlarged_bounding_box=self.enlarged_bounding_box, 
+                original_bounding_box=self.original_bounding_box, 
+                LANDMARKS=self.LANDMARKS
+            )
             essential_landmarks, all_landmarks = result
 
             # 5) Calculate the signal using the land marks
@@ -233,7 +241,7 @@ class HandMovementLeftTask(BaseTask):
 
     
     @staticmethod
-    def extract_landmarks(video_path, start_frame_idx, end_frame_idx, fps, enlarged_bounding_box, LANDMARKS) -> tuple:
+    def extract_landmarks(video_path, start_frame_idx, end_frame_idx, fps, enlarged_bounding_box, original_bounding_box, LANDMARKS) -> tuple:
         """
         Process video frames between start_frame and end_frame and extract hand landmarks 
         for the left hand from each frame.
@@ -253,6 +261,12 @@ class HandMovementLeftTask(BaseTask):
             enlarged_bounding_box['y'],
             enlarged_bounding_box['x'] + enlarged_bounding_box['width'],
             enlarged_bounding_box['y'] + enlarged_bounding_box['height']
+        )
+        original_coords = (
+            original_bounding_box['x'],
+            original_bounding_box['y'],
+            original_bounding_box['x'] + original_bounding_box['width'],
+            original_bounding_box['y'] + enlarged_bounding_box['height']
         )
         
         # Start at the given frame index
@@ -289,14 +303,14 @@ class HandMovementLeftTask(BaseTask):
                 hand_landmarks = detection_result.hand_landmarks[hand_index]
 
                 # Extract the landmark coordinates for key points.
-                index_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["INDEX_FINGER_TIP"]], enlarged_coords)
-                middle_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["MIDDLE_FINGER_TIP"]], enlarged_coords)
-                ring_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["RING_FINGER_TIP"]], enlarged_coords)
-                wrist = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["WRIST"]], enlarged_coords)
+                index_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["INDEX_FINGER_TIP"]], enlarged_coords, original_coords)
+                middle_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["MIDDLE_FINGER_TIP"]], enlarged_coords, original_coords)
+                ring_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["RING_FINGER_TIP"]], enlarged_coords, original_coords)
+                wrist = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["WRIST"]], enlarged_coords, original_coords)
                 essential = [index_finger, middle_finger, ring_finger, wrist]
 
                 # Retrieve all landmarks from the detection.
-                all_lms = BaseTask.get_all_landmarks_coord(hand_landmarks, enlarged_coords)
+                all_lms = BaseTask.get_all_landmarks_coord(hand_landmarks, enlarged_coords, original_coords)
                 
                 essential_landmarks.append(essential)
                 all_landmarks.append(all_lms)

@@ -70,7 +70,15 @@ class LegAgilityLeftTask(BaseTask):
             signal_analyzer = self.get_signal_analyzer()
 
             # 4) Extract landmarks using the defined detector
-            result = LegAgilityLeftTask.extract_landmarks(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
+            result = LegAgilityLeftTask.extract_landmarks(
+                video_path=self.file_path, 
+                start_frame_idx=self.start_frame_idx,
+                end_frame_idx=self.end_frame_idx, 
+                fps=self.fps, 
+                enlarged_bounding_box=self.enlarged_bounding_box, 
+                original_bounding_box=self.original_bounding_box, 
+                LANDMARKS=self.LANDMARKS
+            )
             essential_landmarks, all_landmarks = result
 
             # 5) Compute normalization factor.
@@ -195,7 +203,7 @@ class LegAgilityLeftTask(BaseTask):
         return PeakfinderSignalAnalyzer()
     
     @staticmethod
-    def extract_landmarks(video_path, start_frame_idx, end_frame_idx, fps, enlarged_bounding_box, LANDMARKS) -> tuple:
+    def extract_landmarks(video_path, start_frame_idx, end_frame_idx, fps, enlarged_bounding_box, original_bounding_box, LANDMARKS) -> tuple:
         """
         Iterate through frames between start_frame_idx and end_frame_idx,
         crop each frame to the enlarged bounding box, run the pose detector,
@@ -205,12 +213,17 @@ class LegAgilityLeftTask(BaseTask):
         detector = PoseHeavyDetector().get_detector()
 
         # Calculate coordinates for cropping.
-        enlarged_bb = enlarged_bounding_box
-        x1 = enlarged_bb['x']
-        y1 = enlarged_bb['y']
-        x2 = x1 + enlarged_bb['width']
-        y2 = y1 + enlarged_bb['height']
+        x1 = enlarged_bounding_box['x']
+        y1 = enlarged_bounding_box['y']
+        x2 = x1 + enlarged_bounding_box['width']
+        y2 = y1 + enlarged_bounding_box['height']
         enlarged_coords = (x1, y1, x2, y2)
+
+        ox1 = original_bounding_box['x']
+        oy1 = original_bounding_box['y']
+        ox2 = original_bounding_box['x'] + original_bounding_box['width']
+        oy2 = original_bounding_box['y'] + enlarged_bounding_box['height']
+        original_coords = (ox1,oy1,ox2,oy2)
 
         essential_landmarks = []
         all_landmarks = []
@@ -239,25 +252,25 @@ class LegAgilityLeftTask(BaseTask):
                 # Use the left knee since this is the left task.
                 knee_idx = LANDMARKS["LEFT_KNEE"]
                 knee = [
-                    landmarks[knee_idx].x * (x2 - x1),
-                    landmarks[knee_idx].y * (y2 - y1)
+                    landmarks[knee_idx].x * (x2 - x1) + x1 - ox1,
+                    landmarks[knee_idx].y * (y2 - y1) + y1 - oy1
                 ]
                 # Average the left and right shoulder coordinates.
                 left_shoulder = landmarks[LANDMARKS["LEFT_SHOULDER"]]
                 right_shoulder = landmarks[LANDMARKS["RIGHT_SHOULDER"]]
                 shoulder_mid = [
-                    ((left_shoulder.x + right_shoulder.x) / 2) * (x2 - x1),
-                    ((left_shoulder.y + right_shoulder.y) / 2) * (y2 - y1)
+                    ((left_shoulder.x + right_shoulder.x) / 2) * (x2 - x1) + x1 - ox1,
+                    ((left_shoulder.y + right_shoulder.y) / 2) * (y2 - y1) + y1 - oy1
                 ]
                 # Average the left and right hip coordinates.
                 left_hip = landmarks[LANDMARKS["LEFT_HIP"]]
                 right_hip = landmarks[LANDMARKS["RIGHT_HIP"]]
                 hip_mid = [
-                    ((left_hip.x + right_hip.x) / 2) * (x2 - x1),
-                    ((left_hip.y + right_hip.y) / 2) * (y2 - y1)
+                    ((left_hip.x + right_hip.x) / 2) * (x2 - x1) + x1 - ox1,
+                    ((left_hip.y + right_hip.y) / 2) * (y2 - y1) + y1 - oy1
                 ]
                 essential = [shoulder_mid, knee, hip_mid]
-                all_lms = BaseTask.get_all_landmarks_coord(landmarks, enlarged_coords)
+                all_lms = BaseTask.get_all_landmarks_coord(landmarks, enlarged_coords, original_coords)
                 essential_landmarks.append(essential)
                 all_landmarks.append(all_lms)
             current_frame_idx += 1

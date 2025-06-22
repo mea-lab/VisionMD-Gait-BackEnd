@@ -94,7 +94,9 @@ class GaitTask(BaseTask):
 
             # 3) Get signal analyzer to use it to get feature results
             signal_analyzer = self.get_signal_analyzer()
+            print("Analyzing original signal...")
             results, gait_event_dic = signal_analyzer.analyze(phases, strides, landmarks['poses3d'], self.fps)
+            print("Analyzing mirrored signal...")
             results_mirrored, gait_event_dic_mirrored = signal_analyzer.analyze(phases_mirrored, strides_mirrored, landmarks_mirrored['poses3d'], self.fps)
             avg_results = self.calculate_average_features(results, results_mirrored)
 
@@ -463,8 +465,10 @@ class GaitTask(BaseTask):
 
         # --- Post‐processing for ORIGINAL ---
         all_poses2d = np.concatenate(poses2d_lists, axis=0)[:,0,:,:]
-        all_poses2d[...,0] -= x1
-        all_poses2d[...,1] -= y1
+        ox1 = self.original_bounding_box['x']
+        oy1 = self.original_bounding_box['y']
+        all_poses2d[..., 0] -= ox1
+        all_poses2d[..., 1] -= oy1
         all_poses3d = np.concatenate(poses3d_lists, axis=0)[:,0,:,:]
         all_boxes  = np.concatenate(boxes_lists, axis=0)
         missing_mask = np.array(missing_mask)
@@ -475,8 +479,8 @@ class GaitTask(BaseTask):
 
         # --- Post‐processing for MIRRORED (same pipeline) ---
         mir_poses2d = np.concatenate(poses2d_lists_mirr, axis=0)[:,0,:,:]
-        mir_poses2d[...,0] -= x1  # same subtraction
-        mir_poses2d[...,1] -= y1
+        mir_poses2d[...,0] -= ox1
+        mir_poses2d[...,1] -= oy1
         mir_poses3d = np.concatenate(poses3d_lists_mirr, axis=0)[:,0,:,:]
         mir_boxes   = np.concatenate(boxes_lists_mirr, axis=0)
         mir_interp2d = self.interpolate_missing_poses(mir_poses2d, missing_mask)

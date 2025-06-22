@@ -76,7 +76,15 @@ class ToeTappingLeftTask(BaseTask):
             signal_analyzer = self.get_signal_analyzer()
 
             # 3) Extract landmarks using the defined detector
-            result = ToeTappingLeftTask.extract_landmarks(self.file_path, self.start_frame_idx, self.end_frame_idx, self.fps, self.enlarged_bounding_box, self.LANDMARKS)
+            result = ToeTappingLeftTask.extract_landmarks(
+                video_path=self.file_path, 
+                start_frame_idx=self.start_frame_idx,
+                end_frame_idx=self.end_frame_idx, 
+                fps=self.fps, 
+                enlarged_bounding_box=self.enlarged_bounding_box, 
+                original_bounding_box=self.original_bounding_box, 
+                LANDMARKS=self.LANDMARKS
+            )
             essential_landmarks, all_landmarks = result
 
             # Calculate normalization factor based on shoulder-to-hip distance.
@@ -198,7 +206,7 @@ class ToeTappingLeftTask(BaseTask):
         return PeakfinderSignalAnalyzer()
 
     @staticmethod
-    def extract_landmarks(video_path, start_frame_idx, end_frame_idx, fps, enlarged_bounding_box, LANDMARKS) -> tuple:
+    def extract_landmarks(video_path, start_frame_idx, end_frame_idx, fps, enlarged_bounding_box, original_bounding_box, LANDMARKS) -> tuple:
         """
         Iterates through the specified video frames and extracts:
             - Shoulder midpoint (average of left and right shoulders).
@@ -210,12 +218,17 @@ class ToeTappingLeftTask(BaseTask):
 
         detector = PoseHeavyDetector().get_detector()
 
-        enlarged_bb = enlarged_bounding_box
-        x1 = enlarged_bb['x']
-        y1 = enlarged_bb['y']
-        x2 = x1 + enlarged_bb['width']
-        y2 = y1 + enlarged_bb['height']
+        x1 = enlarged_bounding_box['x']
+        y1 = enlarged_bounding_box['y']
+        x2 = x1 + enlarged_bounding_box['width']
+        y2 = y1 + enlarged_bounding_box['height']
         enlarged_coords = (x1, y1, x2, y2)
+
+        ox1 = original_bounding_box['x']
+        oy1 = original_bounding_box['y']
+        ox2 = original_bounding_box['x'] + original_bounding_box['width']
+        oy2 = original_bounding_box['y'] + enlarged_bounding_box['height']
+        original_coords = (ox1,oy1,ox2,oy2)
 
         essential_landmarks = []
         all_landmarks = []
@@ -245,24 +258,24 @@ class ToeTappingLeftTask(BaseTask):
                 left_shoulder = landmarks[LANDMARKS["LEFT_SHOULDER"]]
                 right_shoulder = landmarks[LANDMARKS["RIGHT_SHOULDER"]]
                 shoulder_mid = [
-                    ((left_shoulder.x + right_shoulder.x) / 2) * (x2 - x1),
-                    ((left_shoulder.y + right_shoulder.y) / 2) * (y2 - y1)
+                    ((left_shoulder.x + right_shoulder.x) / 2) * (x2 - x1) + x1 - ox1,
+                    ((left_shoulder.y + right_shoulder.y) / 2) * (y2 - y1) + y1 - oy1
                 ]
                 # Compute hip midpoint.
                 left_hip = landmarks[LANDMARKS["LEFT_HIP"]]
                 right_hip = landmarks[LANDMARKS["RIGHT_HIP"]]
                 hip_mid = [
-                    ((left_hip.x + right_hip.x) / 2) * (x2 - x1),
-                    ((left_hip.y + right_hip.y) / 2) * (y2 - y1)
+                    ((left_hip.x + right_hip.x) / 2) * (x2 - x1) + x1 - ox1,
+                    ((left_hip.y + right_hip.y) / 2) * (y2 - y1) + y1 - oy1
                 ]
                 # Select the left toe landmark.
                 toe_idx = LANDMARKS["LEFT_FOOT_INDEX"]
                 toe_landmark = [
-                    landmarks[toe_idx].x * (x2 - x1),
-                    landmarks[toe_idx].y * (y2 - y1)
+                    landmarks[toe_idx].x * (x2 - x1) + x1 - ox1,
+                    landmarks[toe_idx].y * (y2 - y1) + y1 - oy1
                 ]
                 essential = [shoulder_mid, toe_landmark, hip_mid]
-                all_lms = BaseTask.get_all_landmarks_coord(landmarks, enlarged_coords)
+                all_lms = BaseTask.get_all_landmarks_coord(landmarks, enlarged_coords, original_coords)
                 essential_landmarks.append(essential)
                 all_landmarks.append(all_lms)
             current_frame_idx += 1
