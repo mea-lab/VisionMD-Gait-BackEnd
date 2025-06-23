@@ -3,7 +3,7 @@
 This repository contains the **back-end** of **VisionMD**, a tool for quantifying motor symptoms from videos. A static version of the front-end is included here, so any changes to both front-end and back-end should be made on the main branch:
 
 GitHub Repository:  
-https://github.com/mea-lab/VideoAnalysisToolBackend/tree/main
+https://github.com/mea-lab/VisionMD-Gait-BackEnd
 
 ---
 
@@ -19,8 +19,8 @@ https://github.com/mea-lab/VideoAnalysisToolBackend/tree/main
 ### 1. Clone the Repository and Switch to "static" branch
 
 ```bash
-git clone https://github.com/mea-lab/VideoAnalysisToolBackend.git
-cd VideoAnalysisToolBackend
+git clone https://github.com/mea-lab/VisionMD-Gait-BackEnd.git
+cd VisionMD-Gait-BackEnd
 git checkout static
 ```
 
