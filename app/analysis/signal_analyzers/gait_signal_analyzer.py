@@ -100,25 +100,25 @@ class GaitSignalAnalyzer(BaseSignalAnalyzer):
         rtf = np.asarray(gait_event_dic['right_up'],    dtype=float)
         if len(lhs) == 0 or len(ltf) == 0 or len(rhs) == 0 or len(rtf) == 0:
             print("Gait signal analyzing not passed")
-            raise ValueError("Error, no gait events were detected by gait transformer to compute features.")
-        #     return {
-        #     "Average stance time": 0,
-        #     "Average swing time": 0,
-        #     "Average double support time": 0,
-        #     "Average step time": 0,
-        #     "Average step length": 0,
-        #     "Average velocity": 0,
-        #     "Average cadence": 0,
-        #     "Average stance time left": 0,
-        #     "Average stance time right": 0,
-        #     "Average swing time left": 0,
-        #     "Average swing time right":  0,
-        #     "Average step time left":      0,
-        #     "Average step time right":   0,   
-        #     "Average step length left":    0, 
-        #     "Average step length right":    0,
-        #     "Arm swing correlation":      0,
-        # }
+            # raise ValueError("Error, no gait events were detected by gait transformer to compute features.")
+            return {
+            "Average stance time": 0,
+            "Average swing time": 0,
+            "Average double support time": 0,
+            "Average step time": 0,
+            "Average step length": 0,
+            "Average velocity": 0,
+            "Average cadence": 0,
+            "Average stance time left": 0,
+            "Average stance time right": 0,
+            "Average swing time left": 0,
+            "Average swing time right":  0,
+            "Average step time left":      0,
+            "Average step time right":   0,   
+            "Average step length left":    0, 
+            "Average step length right":    0,
+            "Arm swing correlation":      0,
+        }
 
         # --- 2) Temporal phases (in frames) ---
         

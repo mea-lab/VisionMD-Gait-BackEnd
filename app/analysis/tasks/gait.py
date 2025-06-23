@@ -113,7 +113,7 @@ class GaitTask(BaseTask):
             response['File name'] = self.file_name
             response['Task name'] = self.task_name
             response = response | avg_results
-            response['signals'] = signals
+            response['signals'] = signals_mirrored
             response['landMarks'] = landmarks['poses2d'].tolist()
             response['landMarks_3D'] = landmarks['poses3d'].tolist()
             response['gait_event_dic'] = {
