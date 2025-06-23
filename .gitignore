@@ -102,3 +102,6 @@ metrabs_local_s/
 __pycache__
 *Zone.Identifier
 *.Identifier*:Zone.Identifier
+serve_windows
+serve_linux
+serve_macos
