@@ -51,6 +51,7 @@ class GaitTask(BaseTask):
 
     original_bounding_box = None
     enlarged_bounding_box = None
+    subject_bounding_boxes = None
 
     _metrabs_detector = None
     _gait_phase_transformer = None
@@ -121,14 +122,14 @@ class GaitTask(BaseTask):
                 for k, v in gait_event_dic.items()
             }
             response['landmark_colors'] = landmark_colors.tolist()
-
+        except Exception as e:
+            return Response(f"Error with gait analysis: {str(e)}", status=500)
+        finally:
             # 5) Clean up memory
-            if self.video:
+            if hasattr(self, "video") and self.video is not None:
                 self.video.release()
             tf.keras.backend.clear_session()
             context().clear_kernel_cache()
-        except Exception as e:
-            return Response(f"Error with gait analysis: {str(e)}", status=500)
 
         return response
 
@@ -170,7 +171,7 @@ class GaitTask(BaseTask):
                 print("Warning: Video project data cannot be decoded.")
                 return Response({}, status=404)
                     
-    
+        #Get all necessary class attributes
         file_name = metadata["metadata"]["video_name"]
         file_path = os.path.join(settings.MEDIA_ROOT, "video_uploads", video_id, file_name)
         task_name = f"{json_data['task_name']}_{json_data['id']}"
@@ -178,21 +179,16 @@ class GaitTask(BaseTask):
         video = cv2.VideoCapture(file_path)
         video_width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
         video_height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
-        #Get all necessary class attributes
-        original_bounding_box = json_data['boundingBox']
-        start_time = json_data['start_time']
-        end_time = json_data['end_time']
-        focal_length = int(json_data.get('focal_length')) if json_data.get('focal_length') else -1
-        height_cm = int(json_data.get('height')) if json_data.get('height') else None
-        if (focal_length < 5 or focal_length > 35):
-            focal_length = -1
-        if(height_cm == None):
-            raise Exception("Invalid or missing height in POST data")
 
         fps = video.get(cv2.CAP_PROP_FPS)
+        start_time = json_data['start_time']
+        end_time = json_data['end_time']
         start_frame_idx = math.floor(fps * start_time)
         end_frame_idx   = math.ceil(fps * end_time)
+
+        original_bounding_box = json_data['boundingBox']
+        subject_bounding_boxes = [box for box in json_data['subject_bounding_boxes'] if start_frame_idx <= box['frameNumber'] <= end_frame_idx]
+
         new_x = int(max(0, original_bounding_box['x'] - original_bounding_box['width'] * 0.125))
         new_y = int(max(0, original_bounding_box['y'] - original_bounding_box['height'] * 0.125))
         new_width = int(min(video_width - new_x, original_bounding_box['width'] * 1.25))
@@ -204,6 +200,18 @@ class GaitTask(BaseTask):
             'width': new_width,
             'height': new_height
         }
+    
+        focal_length = int(json_data.get('focal_length')) if json_data.get('focal_length') else -1
+        height_cm = int(json_data.get('height')) if json_data.get('height') else None
+        if (len(subject_bounding_boxes) != end_frame_idx - start_frame_idx + 1):
+            print("Number of frames", end_frame_idx - start_frame_idx)
+            print("Len of subject bounding boxes", len(subject_bounding_boxes))
+            raise Exception("Number of subject bounding boxes does not match number of frames. Potentially chosen subject in some frames of the chosen task clip.")
+        if (focal_length < 5 or focal_length > 35):
+            focal_length = -1
+        if(height_cm == None):
+            raise Exception("Invalid or missing height in POST data")
+
 
         #Set all necessary class attributes
         self.video = video
@@ -211,6 +219,7 @@ class GaitTask(BaseTask):
         self.file_name = file_name
         self.original_bounding_box = original_bounding_box
         self.enlarged_bounding_box = enlarged_bounding_box
+        self.subject_bounding_boxes = subject_bounding_boxes
         self.start_time = start_time
         self.end_time = end_time
         self.fps = fps
@@ -342,7 +351,6 @@ class GaitTask(BaseTask):
                 - all_preds: dict with keys "poses2d", "poses3d", "boxes" for the normal frames
                 - mirrored_all_preds: dict with keys "poses2d", "poses3d", "boxes" for the mirrored frames
         """
-        # --- [setup unchanged from your original method] ---
         file_path = self.file_path
         file_name = os.path.splitext(os.path.basename(file_path))[0]
         start_frame = self.start_frame_idx
@@ -357,7 +365,7 @@ class GaitTask(BaseTask):
         missing_mask = []
         multiple_people_detected = False
 
-        # camera intrinsics compute (unchanged)
+        # camera intrinsics compute
         cap = cv2.VideoCapture(file_path)
         orig_width  = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         orig_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -370,7 +378,6 @@ class GaitTask(BaseTask):
                         [0, fy, cy],
                         [0,  0,  1]], dtype=np.float32)
         K_tensor = tf.convert_to_tensor(K_full, dtype=tf.float32)
-        x1, y1 = enlarged_bounding_box['x'], enlarged_bounding_box['y']
 
         # reader
         batch_size = 16
@@ -380,7 +387,7 @@ class GaitTask(BaseTask):
 
         for frame_batch in tqdm(vid, desc=f"Processing {file_name}"):
             # collect just the frames in the desired [start_frame, end_frame] range
-            cropped = []
+            frames = []
             for frame in frame_batch:
                 if raw_frame_idx < start_frame:
                     raw_frame_idx += 1
@@ -388,49 +395,77 @@ class GaitTask(BaseTask):
                 if raw_frame_idx > end_frame:
                     stop = True
                     break
-                cropped.append(frame)
+                frames.append(frame)
                 raw_frame_idx += 1
-            if stop and not cropped:
+            if stop and not frames:
                 break
-            if not cropped:
+            if not frames:
                 continue
 
             # --- Prepare tensors for BOTH original and mirrored batches ---
-            batch_np = np.stack(cropped)
+            batch_np = np.stack(frames)
             batch_tensor = tf.convert_to_tensor(batch_np, dtype=tf.uint8)
             # mirror via TensorFlow
             batch_tensor_mirr = tf.image.flip_left_right(batch_tensor)
-            n = tf.shape(batch_tensor)[0]
+            n = batch_tensor.shape[0]
             K_batch = tf.tile(tf.expand_dims(K_tensor, 0), [n,1,1])
+            frame_idx_list = list(range(raw_frame_idx - len(frames), raw_frame_idx))
 
-            # run detector on original
+            # --- Create bounding boxes for original frames ---
+            boxes_list = []
+            for frame_num in frame_idx_list:
+                bbox_entry = next((item for item in self.subject_bounding_boxes if item["frameNumber"] == frame_num), None)
+                if bbox_entry and bbox_entry["data"]:
+                    subject_box = next(box for box in bbox_entry["data"])
+                    if subject_box:
+                        x, y = subject_box["x"], subject_box["y"]
+                        w, h = subject_box["width"], subject_box["height"]
+                        boxes_list.append([[float(x), float(y), float(w), float(h)]])
+                    else:
+                        raise Exception(f"Subject bounding box not found for frame idx {frame_num}")
+                else:
+                    raise Exception(f"Subject bounding box not found for frame idx {frame_num}")
+            boxes = tf.ragged.constant(boxes_list, ragged_rank=1, inner_shape=(4,), dtype=tf.float32)
+            
+            # --- Create bounding boxes for mirrored frames ---
+            mirrored_boxes_list = []
+            for box_per_frame in boxes_list:
+                original_box = box_per_frame[0]
+                x, y, w, h = original_box
+                mirrored_x = orig_width - (x + w)
+                mirrored_boxes_list.append([[mirrored_x, y, w, h]])
+            boxes_mirrored = tf.ragged.constant(mirrored_boxes_list, ragged_rank=1, inner_shape=(4,), dtype=tf.float32)
+
+            print("boxes.shape:", boxes.shape)
+            print("boxes.dtype:", boxes.dtype)
+            print("boxes_mirrored.shape:", boxes_mirrored.shape)
+            print("boxes_mirrored.dtype:", boxes_mirrored.dtype)
+
+            # run detector with instrinc matrix
             if focal_length_equivalent != -1:
-                pred = GaitTask._metrabs_detector.detect_poses_batched(
+                pred = GaitTask._metrabs_detector.estimate_poses_batched(
                     images=batch_tensor,
                     intrinsic_matrix=K_batch,
+                    boxes=boxes,
                     skeleton=self.skeleton,
-                    detector_flip_aug=True,
-                    detector_threshold=0.2,
                 )
-                pred_mirr = GaitTask._metrabs_detector.detect_poses_batched(
+                pred_mirr = GaitTask._metrabs_detector.estimate_poses_batched(
                     images=batch_tensor_mirr,
                     intrinsic_matrix=K_batch,
+                    boxes=boxes_mirrored,
                     skeleton=self.skeleton,
-                    detector_flip_aug=True,
-                    detector_threshold=0.2,
                 )
+            # run detector without instrinc matrix
             else:
-                pred = GaitTask._metrabs_detector.detect_poses_batched(
+                pred = GaitTask._metrabs_detector.estimate_poses_batched(
                     images=batch_tensor,
+                    boxes=boxes,
                     skeleton=self.skeleton,
-                    detector_flip_aug=True,
-                    detector_threshold=0.2,
                 )
-                pred_mirr = GaitTask._metrabs_detector.detect_poses_batched(
+                pred_mirr = GaitTask._metrabs_detector.estimate_poses_batched(
                     images=batch_tensor_mirr,
+                    boxes=boxes_mirrored,
                     skeleton=self.skeleton,
-                    detector_flip_aug=True,
-                    detector_threshold=0.2,
                 )
 
             # --- Accumulate both original and mirrored detections ---
@@ -439,13 +474,11 @@ class GaitTask(BaseTask):
                 if pred["poses2d"][j].shape[0] > 0:
                     poses2d_lists.append(pred["poses2d"][j:j+1, 0:1].numpy())
                     poses3d_lists.append(pred["poses3d"][j:j+1, 0:1].numpy())
-                    boxes_lists.append(pred["boxes"][j:j+1, 0:1].numpy())
                     missing = False
                 else:
                     # fill NaNs
                     poses2d_lists.append(np.full([1,1,17,2], np.nan, np.float16))
                     poses3d_lists.append(np.full([1,1,17,3], np.nan, np.float16))
-                    boxes_lists.append(np.full([1,1,5],    np.nan, np.float16))
                     missing = True
                 missing_mask.append(missing)
                 if pred["poses2d"][j].shape[0] > 1:
@@ -455,11 +488,9 @@ class GaitTask(BaseTask):
                 if pred_mirr["poses2d"][j].shape[0] > 0:
                     poses2d_lists_mirr.append(pred_mirr["poses2d"][j:j+1, 0:1].numpy())
                     poses3d_lists_mirr.append(pred_mirr["poses3d"][j:j+1, 0:1].numpy())
-                    boxes_lists_mirr.append(pred_mirr["boxes"][j:j+1, 0:1].numpy())
                 else:
                     poses2d_lists_mirr.append(np.full([1,1,17,2], np.nan, np.float16))
                     poses3d_lists_mirr.append(np.full([1,1,17,3], np.nan, np.float16))
-                    boxes_lists_mirr.append(np.full([1,1,5],    np.nan, np.float16))
 
             del pred, pred_mirr, batch_tensor, batch_tensor_mirr
 
@@ -470,26 +501,23 @@ class GaitTask(BaseTask):
         all_poses2d[..., 0] -= ox1
         all_poses2d[..., 1] -= oy1
         all_poses3d = np.concatenate(poses3d_lists, axis=0)[:,0,:,:]
-        all_boxes  = np.concatenate(boxes_lists, axis=0)
         missing_mask = np.array(missing_mask)
         interp2d = self.interpolate_missing_poses(all_poses2d, missing_mask)
         interp3d = self.interpolate_missing_poses(all_poses3d, missing_mask)
         corr3d   = self.correct_left_right_swapping(interp3d)
-        all_preds = {"poses2d": interp2d, "poses3d": corr3d, "boxes": all_boxes}
+        all_preds = {"poses2d": interp2d, "poses3d": corr3d}
 
         # --- Post‐processing for MIRRORED (same pipeline) ---
         mir_poses2d = np.concatenate(poses2d_lists_mirr, axis=0)[:,0,:,:]
         mir_poses2d[...,0] -= ox1
         mir_poses2d[...,1] -= oy1
         mir_poses3d = np.concatenate(poses3d_lists_mirr, axis=0)[:,0,:,:]
-        mir_boxes   = np.concatenate(boxes_lists_mirr, axis=0)
         mir_interp2d = self.interpolate_missing_poses(mir_poses2d, missing_mask)
         mir_interp3d = self.interpolate_missing_poses(mir_poses3d, missing_mask)
         mir_corr3d   = self.correct_left_right_swapping(mir_interp3d)
         mirrored_all_preds = {
             "poses2d": mir_interp2d,
             "poses3d": mir_corr3d,
-            "boxes":   mir_boxes
         }
 
         # --- warnings & return ---
@@ -517,7 +545,6 @@ class GaitTask(BaseTask):
         """
         import numpy as np
 
-        # ------------------------------------------------------------------ helpers
         def to_idx(arr):
             """Floor to int and keep inside [0, n_frames-1]."""
             return np.clip(np.floor(arr).astype(int), 0, n_frames - 1)
@@ -528,7 +555,7 @@ class GaitTask(BaseTask):
             ev.sort(key=lambda x: x[0])
 
             mask = np.zeros(n_frames, dtype=bool)
-            in_stance = bool(ev and ev[0][1] == 'u')   # already in stance if first is 'up'
+            in_stance = bool(ev and ev[0][1] == 'u')
             last_t = 0
             for t, kind in ev:
                 t = np.clip(t, 0, n_frames)
@@ -539,7 +566,6 @@ class GaitTask(BaseTask):
             if in_stance:
                 mask[last_t:] = True
             return mask
-        # --------------------------------------------------------------------------
 
         n_frames, n_joints = poses_3D.shape[:2]
         landmark_colors = np.full((n_frames, n_joints, 3), [255, 0, 0], dtype=np.uint8)
@@ -559,8 +585,8 @@ class GaitTask(BaseTask):
         right_stance = stance_mask(rd, ru)
 
         # colour ankles
-        landmark_colors[left_stance,  L_ANK] = [0, 255,   0]   # stance  – green
-        landmark_colors[~left_stance, L_ANK] = [0,   0, 255]   # swing   – blue
+        landmark_colors[left_stance,  L_ANK] = [0, 255,   0]   # stance green
+        landmark_colors[~left_stance, L_ANK] = [0,   0, 255]   # swing blue
         landmark_colors[right_stance, R_ANK] = [0, 255,   0]
         landmark_colors[~right_stance, R_ANK] = [0,   0, 255]
 
@@ -576,10 +602,6 @@ class GaitTask(BaseTask):
     # -------------------------------------------------------------
     # --- START: Custom helper methods definitions
     # -------------------------------------------------------------
-
-    # ----- Function for calculating color of landmarks -----
-
-
     # ----- Function for calculating the averages features of original and mirrored videos
     def calculate_average_features(self, original_features, mirrored_features):
         average = {
