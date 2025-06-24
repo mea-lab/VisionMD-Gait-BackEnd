@@ -1,6 +1,7 @@
 pyinstaller serve_linux.py \
   --console \
   --onedir \
+  --distpath ./pyinstaller_builds \
   --add-data "VideoAnalysisToolBackend:VideoAnalysisToolBackend" \
   --add-data "app:app" \
   --clean \

@@ -1,6 +1,7 @@
 pyinstaller serve_windows.py ^
   --console ^
   --onedir ^
+  --distpath ./pyinstaller_builds ^
   --add-data "VideoAnalysisToolBackend;VideoAnalysisToolBackend" ^
   --add-data "app;app" ^
   --clean ^
