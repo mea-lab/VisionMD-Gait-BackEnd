@@ -104,4 +104,4 @@ __pycache__
 *.Identifier*:Zone.Identifier
 serve_windows
 serve_linux
-serve_macos
+serve_mac
