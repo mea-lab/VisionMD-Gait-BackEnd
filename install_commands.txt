@@ -43,6 +43,4 @@ pip install --no-cache-dir ^
   lap>=0.5.12 ^
   torch torchvision torchaudio
 
-
-
 pip install --no-cache-dir django djangorestframework django-cors-headers pillow pyinstaller 
