@@ -295,7 +295,7 @@ class ToeTappingLeftTask(BaseTask):
                 signal.append(prev_signal)
                 continue
             shoulder, toe = frame_lms[0], frame_lms[1]
-            diff = shoulder[1] - toe[1]
+            diff = abs(shoulder[1] - toe[1])
             prev_signal = diff
             signal.append(diff)
         return signal

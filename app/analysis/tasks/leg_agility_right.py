@@ -274,7 +274,7 @@ class LegAgilityRightTask(BaseTask):
                 signal.append(prev_signal)
                 continue
             shoulder_mid, knee, _ = frame_lms
-            diff = shoulder_mid[1] - knee[1]
+            diff = abs(shoulder_mid[1] - knee[1])
             prev_signal = diff
             signal.append(diff)
         return signal

@@ -126,7 +126,9 @@ class HandTremorRightTask(BaseTask):
                 "Tremor Horizontal (mm)": tremorSignal_Horizontal_mm.tolist(),
             }
 
-            response['landMarks'] = [ arr.tolist() for arr in landmarks ]
+            landmarks_np = np.array(landmarks)
+            middle = landmarks_np[:, [1, 2, 3], :]
+            response['landMarks'] = [ arr.tolist() for arr in middle]
         except Exception as e:
             return Response(f"Error with hand tremor right analysis: {str(e)}", status=500)
         finally:
