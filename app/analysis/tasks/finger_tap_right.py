@@ -271,7 +271,7 @@ class FingerTapRightTask(BaseTask):
                 index_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["INDEX_FINGER_TIP"]], enlarged_coords, original_coords)
                 middle_finger = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["MIDDLE_FINGER_TIP"]], enlarged_coords, original_coords)
                 wrist = BaseTask.get_landmark_coords(hand_landmarks[LANDMARKS["WRIST"]], enlarged_coords, original_coords)
-                essential = [thumb, index_finger, middle_finger, wrist]
+                essential = [thumb, index_finger]
                 all_lms = BaseTask.get_all_landmarks_coord(hand_landmarks, enlarged_coords, original_coords)
                 essential_landmarks.append(essential)
                 all_landmarks.append(all_lms)

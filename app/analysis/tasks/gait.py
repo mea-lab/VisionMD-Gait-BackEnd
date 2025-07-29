@@ -114,7 +114,7 @@ class GaitTask(BaseTask):
             response['File name'] = self.file_name
             response['Task name'] = self.task_name
             response = response | avg_results
-            response['signals'] = signals_mirrored
+            response['signals'] = signals
             response['landMarks'] = landmarks['poses2d'].tolist()
             response['landMarks_3D'] = landmarks['poses3d'].tolist()
             response['gait_event_dic'] = {
@@ -145,90 +145,108 @@ class GaitTask(BaseTask):
         Returns a dictionary of parameters. 
         MUST DEFINE ALL ABSTRACT PROPERTIES. 
         """
-        # Get all variables set up and check if folder and file paths exist
+        # Check if video id, json_data, video folder and video metadata file all exist
         video_id = request.GET.get('id', None)
         if not video_id:
             raise Exception("Video project id not provided.")
         
-        try:
-            json_data = json.loads(request.POST['json_data'])
-        except (KeyError, json.JSONDecodeError):
-            raise Exception("Invalid or missing 'json_data' in POST data")
-
-        folder_path = os.path.join(settings.MEDIA_ROOT, "video_uploads")
-        project_folder_path = os.path.join(folder_path, video_id)
-        if not os.path.isdir(project_folder_path):
-            raise Exception("Video project folder does not exist.")
+        if 'json_data' not in request.POST:
+            raise Exception("Missing 'json_data' in POST data")
+        json_raw = request.POST['json_data']
         
-        subfolder_path = os.path.join(folder_path, video_id)
-        metadata = {}
-        if os.path.isdir(subfolder_path):
-            json_path = os.path.join(subfolder_path, "metadata.json")
+        if not json_raw:
+            raise Exception("Empty 'json_data' in POST data")
+        json_data = json.loads(json_raw)
+        
+        folder_path = os.path.join(settings.MEDIA_ROOT, "video_uploads", video_id)
+        if not os.path.isdir(folder_path):
+            raise Exception("Video project folder does not exist.")
+
+        metadata_path = os.path.join(folder_path, "metadata.json")
+        if not os.path.exists(metadata_path):
+            raise Exception("Metadata file for video does not exist.")
+        
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             try:
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-            except (IOError, json.JSONDecodeError):
-                print("Warning: Video project data cannot be decoded.")
-                return Response({}, status=404)
+                metadata = json.load(f)
+            except json.JSONDecodeError:
+                raise Exception(f"Metadata file '{metadata_path}' cannot be decoded.")
+
                     
-        #Get all necessary class attributes
+        #Getting video attributes
         file_name = metadata["metadata"]["video_name"]
         file_path = os.path.join(settings.MEDIA_ROOT, "video_uploads", video_id, file_name)
         task_name = f"{json_data['task_name']}_{json_data['id']}"
-    
         video = cv2.VideoCapture(file_path)
         video_width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
         video_height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
         fps = video.get(cv2.CAP_PROP_FPS)
         start_time = json_data['start_time']
         end_time = json_data['end_time']
         start_frame_idx = math.floor(fps * start_time)
         end_frame_idx   = math.ceil(fps * end_time)
-
         original_bounding_box = json_data['boundingBox']
         subject_bounding_boxes = [box for box in json_data['subject_bounding_boxes'] if start_frame_idx <= box['frameNumber'] <= end_frame_idx]
-
         new_x = int(max(0, original_bounding_box['x'] - original_bounding_box['width'] * 0.125))
         new_y = int(max(0, original_bounding_box['y'] - original_bounding_box['height'] * 0.125))
         new_width = int(min(video_width - new_x, original_bounding_box['width'] * 1.25))
         new_height = int(min(video_height - new_y, original_bounding_box['height'] * 1.25))
-
         enlarged_bounding_box = {
             'x': new_x,
             'y': new_y,
             'width': new_width,
             'height': new_height
         }
-    
-        focal_length = int(json_data.get('focal_length')) if json_data.get('focal_length') else -1
         height_cm = int(json_data.get('height')) if json_data.get('height') else None
-        if (len(subject_bounding_boxes) != end_frame_idx - start_frame_idx + 1):
+
+
+        # Getting camera properties
+        field_of_view = int(json_data.get('field_of_view')) if json_data.get('field_of_view') else None
+        sensor_height = int(json_data.get('sensor_height')) if json_data.get('sensor_height') else None
+        sensor_width = int(json_data.get('sensor_width')) if json_data.get('sensor_width') else None
+        focal_length = int(json_data.get('focal_length')) if json_data.get('focal_length') else None
+        intrinsic_matrix = np.array(json_data.get('intrinsic_matrix')) if json_data.get('intrinsic_matrix') else None
+        extrinsic_matrix = np.array(json_data.get('extrinsic_matrix')) if json_data.get('extrinsic_matrix') else None
+
+        print("field_of_view:", field_of_view, "| type:", type(field_of_view))
+        print("sensor_height:", sensor_height, "| type:", type(sensor_height))
+        print("sensor_width:", sensor_width, "| type:", type(sensor_width))
+        print("focal_length:", focal_length, "| type:", type(focal_length))
+        print("intrinsic_matrix:\n", intrinsic_matrix, "\n| type:", type(intrinsic_matrix))
+        print("extrinsic_matrix:\n", extrinsic_matrix, "\n| type:", type(extrinsic_matrix))
+
+
+        if ( abs(len(subject_bounding_boxes) - (end_frame_idx - start_frame_idx + 1)) > 1 ):
             print("Number of frames", end_frame_idx - start_frame_idx)
             print("Len of subject bounding boxes", len(subject_bounding_boxes))
-            raise Exception("Number of subject bounding boxes does not match number of frames. Potentially chosen subject in some frames of the chosen task clip.")
-        if (focal_length < 5 or focal_length > 35):
-            focal_length = -1
+            raise Exception("Subject bounding boxes not found in all frames of the task. The chosen subject may not be correct.")
+
         if(height_cm == None):
-            raise Exception("Invalid or missing height in POST data")
+            raise Exception("Invalid or missing height.")
 
 
         #Set all necessary class attributes
-        self.video = video
-        self.file_path = file_path
         self.file_name = file_name
+        self.file_path = file_path
+        self.task_name = task_name
+        self.video = video
+        self.fps = fps
+        self.start_time = start_time
+        self.end_time = end_time
+        self.start_frame_idx = start_frame_idx
+        self.end_frame_idx = end_frame_idx
         self.original_bounding_box = original_bounding_box
         self.enlarged_bounding_box = enlarged_bounding_box
         self.subject_bounding_boxes = subject_bounding_boxes
-        self.start_time = start_time
-        self.end_time = end_time
-        self.fps = fps
-        self.start_frame_idx = start_frame_idx
-        self.end_frame_idx = end_frame_idx
-        self.focal_length = focal_length
         self.height_cm = height_cm
-        self.task_name = task_name
 
+        self.field_of_view = field_of_view
+        self.sensor_height = sensor_height
+        self.sensor_width = sensor_width
+        self.focal_length = focal_length
+        self.intrinsic_matrix = intrinsic_matrix
+        self.extrinsic_matrix = extrinsic_matrix
+        
         return {
             "video": video,
             "file_name": file_name,
@@ -355,29 +373,23 @@ class GaitTask(BaseTask):
         file_name = os.path.splitext(os.path.basename(file_path))[0]
         start_frame = self.start_frame_idx
         end_frame = self.end_frame_idx
-        fps = self.fps
-        focal_length_equivalent = self.focal_length
-        height_cm = self.height_cm
-        enlarged_bounding_box = self.enlarged_bounding_box
+
+        field_of_view = self.field_of_view
+        sensor_height = self.sensor_height
+        sensor_width = self.sensor_width
+        focal_length = self.focal_length
+        intrinsic_matrix = self.intrinsic_matrix
+        extrinsic_matrix = self.extrinsic_matrix
 
         poses2d_lists, poses3d_lists, boxes_lists = [], [], []
         poses2d_lists_mirr, poses3d_lists_mirr, boxes_lists_mirr = [], [], []
         missing_mask = []
         multiple_people_detected = False
 
-        # camera intrinsics compute
+        
         cap = cv2.VideoCapture(file_path)
         orig_width  = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        orig_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         cap.release()
-        diag_35x24mm = (36**2 + 24**2) ** 0.5
-        diag_px = (orig_width**2 + orig_height**2)**0.5
-        fx = fy = focal_length_equivalent * (diag_px / diag_35x24mm)
-        cx, cy = orig_width/2.0, orig_height/2.0
-        K_full = np.array([[fx, 0, cx],
-                        [0, fy, cy],
-                        [0,  0,  1]], dtype=np.float32)
-        K_tensor = tf.convert_to_tensor(K_full, dtype=tf.float32)
 
         # reader
         batch_size = 16
@@ -408,7 +420,6 @@ class GaitTask(BaseTask):
             # mirror via TensorFlow
             batch_tensor_mirr = tf.image.flip_left_right(batch_tensor)
             n = batch_tensor.shape[0]
-            K_batch = tf.tile(tf.expand_dims(K_tensor, 0), [n,1,1])
             frame_idx_list = list(range(raw_frame_idx - len(frames), raw_frame_idx))
 
             # --- Create bounding boxes for original frames ---
@@ -441,32 +452,16 @@ class GaitTask(BaseTask):
             print("boxes_mirrored.shape:", boxes_mirrored.shape)
             print("boxes_mirrored.dtype:", boxes_mirrored.dtype)
 
-            # run detector with instrinc matrix
-            if focal_length_equivalent != -1:
-                pred = GaitTask._metrabs_detector.estimate_poses_batched(
-                    images=batch_tensor,
-                    intrinsic_matrix=K_batch,
-                    boxes=boxes,
-                    skeleton=self.skeleton,
-                )
-                pred_mirr = GaitTask._metrabs_detector.estimate_poses_batched(
-                    images=batch_tensor_mirr,
-                    intrinsic_matrix=K_batch,
-                    boxes=boxes_mirrored,
-                    skeleton=self.skeleton,
-                )
-            # run detector without instrinc matrix
-            else:
-                pred = GaitTask._metrabs_detector.estimate_poses_batched(
-                    images=batch_tensor,
-                    boxes=boxes,
-                    skeleton=self.skeleton,
-                )
-                pred_mirr = GaitTask._metrabs_detector.estimate_poses_batched(
-                    images=batch_tensor_mirr,
-                    boxes=boxes_mirrored,
-                    skeleton=self.skeleton,
-                )
+            pred = GaitTask._metrabs_detector.estimate_poses_batched(
+                images=batch_tensor,
+                boxes=boxes,
+                skeleton=self.skeleton,
+            )
+            pred_mirr = GaitTask._metrabs_detector.estimate_poses_batched(
+                images=batch_tensor_mirr,
+                boxes=boxes_mirrored,
+                skeleton=self.skeleton,
+            )
 
             # --- Accumulate both original and mirrored detections ---
             for j in range(n):
@@ -498,8 +493,6 @@ class GaitTask(BaseTask):
         all_poses2d = np.concatenate(poses2d_lists, axis=0)[:,0,:,:]
         ox1 = self.original_bounding_box['x']
         oy1 = self.original_bounding_box['y']
-        all_poses2d[..., 0] -= ox1
-        all_poses2d[..., 1] -= oy1
         all_poses3d = np.concatenate(poses3d_lists, axis=0)[:,0,:,:]
         missing_mask = np.array(missing_mask)
         interp2d = self.interpolate_missing_poses(all_poses2d, missing_mask)
@@ -509,8 +502,6 @@ class GaitTask(BaseTask):
 
         # --- Post‐processing for MIRRORED (same pipeline) ---
         mir_poses2d = np.concatenate(poses2d_lists_mirr, axis=0)[:,0,:,:]
-        mir_poses2d[...,0] -= ox1
-        mir_poses2d[...,1] -= oy1
         mir_poses3d = np.concatenate(poses3d_lists_mirr, axis=0)[:,0,:,:]
         mir_interp2d = self.interpolate_missing_poses(mir_poses2d, missing_mask)
         mir_interp3d = self.interpolate_missing_poses(mir_poses3d, missing_mask)

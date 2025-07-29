@@ -185,8 +185,8 @@ class BaseTask(ABC):
         x1, y1, x2, y2 = enlarged_coords
         ox1, oy1, ox2, oy2 = original_coords
         return [
-            landmark.x * (x2 - x1) +  x1 - ox1,
-            landmark.y * (y2 - y1) +  y1 - oy1,
+            landmark.x * (x2 - x1) +  x1,
+            landmark.y * (y2 - y1) +  y1,
         ]
 
     @staticmethod
@@ -200,8 +200,8 @@ class BaseTask(ABC):
         coords = []
         for lm in landmarks:
             coords.append([
-                lm.x * (x2 - x1) + x1 - ox1,
-                lm.y * (y2 - y1) + y1 - oy1,
+                lm.x * (x2 - x1) + x1,
+                lm.y * (y2 - y1) + y1,
                 lm.z
             ])
         return coords

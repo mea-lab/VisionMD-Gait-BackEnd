@@ -257,20 +257,20 @@ class ToeTappingRightTask(BaseTask):
                 left_shoulder = landmarks[LANDMARKS["LEFT_SHOULDER"]]
                 right_shoulder = landmarks[LANDMARKS["RIGHT_SHOULDER"]]
                 shoulder_mid = [
-                    ((left_shoulder.x + right_shoulder.x) / 2) * (x2 - x1) + x1 - ox1,
-                    ((left_shoulder.y + right_shoulder.y) / 2) * (y2 - y1) + y1 - oy1
+                    ((left_shoulder.x + right_shoulder.x) / 2) * (x2 - x1) + x1,
+                    ((left_shoulder.y + right_shoulder.y) / 2) * (y2 - y1) + y1
                 ]
                 left_hip = landmarks[LANDMARKS["LEFT_HIP"]]
                 right_hip = landmarks[LANDMARKS["RIGHT_HIP"]]
                 hip_mid = [
-                    ((left_hip.x + right_hip.x) / 2) * (x2 - x1) + x1 - ox1,
-                    ((left_hip.y + right_hip.y) / 2) * (y2 - y1) + y1 - oy1
+                    ((left_hip.x + right_hip.x) / 2) * (x2 - x1) + x1,
+                    ((left_hip.y + right_hip.y) / 2) * (y2 - y1) + y1
                 ]
                 # Select the right toe landmark.
                 toe_idx = LANDMARKS["RIGHT_FOOT_INDEX"]
                 toe_landmark = [
-                    landmarks[toe_idx].x * (x2 - x1) + x1 - ox1,
-                    landmarks[toe_idx].y * (y2 - y1) + y1 - oy1
+                    landmarks[toe_idx].x * (x2 - x1) + x1,
+                    landmarks[toe_idx].y * (y2 - y1) + y1
                 ]
                 essential = [shoulder_mid, toe_landmark, hip_mid]
                 all_lms = BaseTask.get_all_landmarks_coord(landmarks, enlarged_coords, original_coords)
@@ -294,7 +294,6 @@ class ToeTappingRightTask(BaseTask):
                 continue
             shoulder, toe = frame_lms[0], frame_lms[1]
             diff = shoulder[1] - toe[1]
-            diff = diff if diff >= 0 else 0
             prev_signal = diff
             signal.append(diff)
         return signal

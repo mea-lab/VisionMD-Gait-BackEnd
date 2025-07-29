@@ -99,6 +99,7 @@ db.sqlite3
 /VisionMD
 video_uploads/
 metrabs_local_s/
+metrabs_eff2s_y4/
 __pycache__
 *Zone.Identifier
 *.Identifier*:Zone.Identifier

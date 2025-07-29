@@ -243,20 +243,20 @@ class LegAgilityRightTask(BaseTask):
                 # Use the right knee since this is the right leg task.
                 knee_idx = LANDMARKS["RIGHT_KNEE"]
                 knee = [
-                    landmarks[knee_idx].x * (x2 - x1) + x1 - ox1,
-                    landmarks[knee_idx].y * (y2 - y1) + y1 - oy1
+                    landmarks[knee_idx].x * (x2 - x1) + x1,
+                    landmarks[knee_idx].y * (y2 - y1) + y1
                 ]
                 left_shoulder = landmarks[LANDMARKS["LEFT_SHOULDER"]]
                 right_shoulder = landmarks[LANDMARKS["RIGHT_SHOULDER"]]
                 shoulder_mid = [
-                    ((left_shoulder.x + right_shoulder.x) / 2) * (x2 - x1) + x1 - ox1,
-                    ((left_shoulder.y + right_shoulder.y) / 2) * (y2 - y1) + y1 - oy1
+                    ((left_shoulder.x + right_shoulder.x) / 2) * (x2 - x1) + x1,
+                    ((left_shoulder.y + right_shoulder.y) / 2) * (y2 - y1) + y1
                 ]
                 left_hip = landmarks[LANDMARKS["LEFT_HIP"]]
                 right_hip = landmarks[LANDMARKS["RIGHT_HIP"]]
                 hip_mid = [
-                    ((left_hip.x + right_hip.x) / 2) * (x2 - x1) + x1 - ox1,
-                    ((left_hip.y + right_hip.y) / 2) * (y2 - y1) + y1 - oy1
+                    ((left_hip.x + right_hip.x) / 2) * (x2 - x1) + x1,
+                    ((left_hip.y + right_hip.y) / 2) * (y2 - y1) + y1
                 ]
                 essential = [shoulder_mid, knee, hip_mid]
                 all_lms = BaseTask.get_all_landmarks_coord(landmarks, enlarged_coords, original_coords)
@@ -275,7 +275,6 @@ class LegAgilityRightTask(BaseTask):
                 continue
             shoulder_mid, knee, _ = frame_lms
             diff = shoulder_mid[1] - knee[1]
-            diff = diff if diff >= 0 else 0
             prev_signal = diff
             signal.append(diff)
         return signal
