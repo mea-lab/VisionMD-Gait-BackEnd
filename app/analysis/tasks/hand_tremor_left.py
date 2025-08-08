@@ -142,83 +142,123 @@ class HandTremorRightTask(BaseTask):
 
     
     def prepare_video_parameters(self, request):
-        # Get all variables set up and check if folder and file paths exist
+        """
+        Prepares video parameters from the HTTP request:
+         - Parses JSON for bounding box and time codes.
+         - Saves the uploaded video file.
+         - Computes the expanded bounding box.
+         - Determines FPS and start/end frame indices.
+        Returns a dictionary of parameters. 
+        MUST DEFINE ALL ABSTRACT PROPERTIES. 
+        """
+        # Check if video id, json_data, video folder and video metadata file all exist
         video_id = request.GET.get('id', None)
         if not video_id:
             raise Exception("Video project id not provided.")
         
-        try:
-            json_data = json.loads(request.POST['json_data'])
-        except (KeyError, json.JSONDecodeError):
-            raise Exception("Invalid or missing 'json_data' in POST data")
-
-        folder_path = os.path.join(settings.MEDIA_ROOT, "video_uploads")
-        project_folder_path = os.path.join(folder_path, video_id)
-        if not os.path.isdir(project_folder_path):
-            raise Exception("Video project folder does not exist.")
+        if 'json_data' not in request.POST:
+            raise Exception("Missing 'json_data' in POST data")
+        json_raw = request.POST['json_data']
         
-        subfolder_path = os.path.join(folder_path, video_id)
-        metadata = {}
-        if os.path.isdir(subfolder_path):
-            json_path = os.path.join(subfolder_path, "metadata.json")
+        if not json_raw:
+            raise Exception("Empty 'json_data' in POST data")
+        json_data = json.loads(json_raw)
+        
+        folder_path = os.path.join(settings.MEDIA_ROOT, "video_uploads", video_id)
+        if not os.path.isdir(folder_path):
+            raise Exception("Video project folder does not exist.")
+
+        metadata_path = os.path.join(folder_path, "metadata.json")
+        if not os.path.exists(metadata_path):
+            raise Exception("Metadata file for video does not exist.")
+        
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             try:
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-            except (IOError, json.JSONDecodeError):
-                print("Warning: Video project data cannot be decoded.")
-                return Response({}, status=404)
+                metadata = json.load(f)
+            except json.JSONDecodeError:
+                raise Exception(f"Metadata file '{metadata_path}' cannot be decoded.")
+
                     
-        #Get all necessary class attributes
+        #Getting video attributes
         file_name = metadata["metadata"]["video_name"]
         file_path = os.path.join(settings.MEDIA_ROOT, "video_uploads", video_id, file_name)
         task_name = f"{json_data['task_name']}_{json_data['id']}"
-    
         video = cv2.VideoCapture(file_path)
         video_width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
         video_height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
         fps = video.get(cv2.CAP_PROP_FPS)
         start_time = json_data['start_time']
         end_time = json_data['end_time']
         start_frame_idx = math.floor(fps * start_time)
         end_frame_idx   = math.ceil(fps * end_time)
-
         original_bounding_box = json_data['boundingBox']
         subject_bounding_boxes = [box for box in json_data['subject_bounding_boxes'] if start_frame_idx <= box['frameNumber'] <= end_frame_idx]
-
         new_x = int(max(0, original_bounding_box['x'] - original_bounding_box['width'] * 0.125))
         new_y = int(max(0, original_bounding_box['y'] - original_bounding_box['height'] * 0.125))
         new_width = int(min(video_width - new_x, original_bounding_box['width'] * 1.25))
         new_height = int(min(video_height - new_y, original_bounding_box['height'] * 1.25))
-
         enlarged_bounding_box = {
             'x': new_x,
             'y': new_y,
             'width': new_width,
             'height': new_height
         }
-    
-        if (len(subject_bounding_boxes) != end_frame_idx - start_frame_idx + 1):
+        height_cm = int(json_data.get('height')) if json_data.get('height') else None
+
+
+        # Getting camera properties
+        field_of_view = int(json_data.get('field_of_view')) if json_data.get('field_of_view') else None
+        sensor_height = int(json_data.get('sensor_height')) if json_data.get('sensor_height') else None
+        sensor_width = int(json_data.get('sensor_width')) if json_data.get('sensor_width') else None
+        focal_length = int(json_data.get('focal_length')) if json_data.get('focal_length') else None
+        intrinsic_matrix = np.array(json_data.get('intrinsic_matrix')) if json_data.get('intrinsic_matrix') else None
+        extrinsic_matrix = np.array(json_data.get('extrinsic_matrix')) if json_data.get('extrinsic_matrix') else None
+
+        # focal length [pixels] = focal length [mm] / sensor pixel size [µm/pixels]
+
+        if(sensor_height != None and sensor_width != None and focal_length != None and intrinsic_matrix == None):
+            fx = focal_length / sensor_width * 1000
+            cx = video_width / 2
+            fy = focal_length / sensor_height * 1000
+            cy = video_height / 2
+            intrinsic_matrix = [
+                [fx, 0,  cx],
+                [0,  fy, cy],
+                [0,  0,   0],
+            ]
+
+
+        if ( abs(len(subject_bounding_boxes) - (end_frame_idx - start_frame_idx + 1)) > 1 ):
             print("Number of frames", end_frame_idx - start_frame_idx)
             print("Len of subject bounding boxes", len(subject_bounding_boxes))
-            raise Exception("Number of subject bounding boxes does not match number of frames. Potentially chosen subject in some frames of the chosen task clip.")
+            raise Exception("Subject bounding boxes not found in all frames of the task. The chosen subject may not be correct.")
 
+        if(height_cm == None):
+            raise Exception("Invalid or missing height.")
 
 
         #Set all necessary class attributes
-        self.video = video
-        self.file_path = file_path
         self.file_name = file_name
+        self.file_path = file_path
+        self.task_name = task_name
+        self.video = video
+        self.fps = fps
+        self.start_time = start_time
+        self.end_time = end_time
+        self.start_frame_idx = start_frame_idx
+        self.end_frame_idx = end_frame_idx
         self.original_bounding_box = original_bounding_box
         self.enlarged_bounding_box = enlarged_bounding_box
         self.subject_bounding_boxes = subject_bounding_boxes
-        self.start_time = start_time
-        self.end_time = end_time
-        self.fps = fps
-        self.start_frame_idx = start_frame_idx
-        self.end_frame_idx = end_frame_idx
-        self.task_name = task_name
+        self.height_cm = height_cm
 
+        self.field_of_view = field_of_view
+        self.sensor_height = sensor_height
+        self.sensor_width = sensor_width
+        self.focal_length = focal_length
+        self.intrinsic_matrix = intrinsic_matrix
+        self.extrinsic_matrix = extrinsic_matrix
+        
         return {
             "video": video,
             "file_name": file_name,
@@ -229,6 +269,8 @@ class HandTremorRightTask(BaseTask):
             "end_time": end_time,
             "start_frame_idx": start_frame_idx,
             "end_frame_idx": end_frame_idx,
+            "focal_length": focal_length,
+            "height_cm": height_cm,
         }
 
 
@@ -300,8 +342,8 @@ class HandTremorRightTask(BaseTask):
         signal array.
         """
 
-        tremorSignal_Vertical = self.bandpass_filter(np.array(landmarks)[:,[2,3,4],1].mean(axis=1),fs=self.fps)
-        tremorSignal_Horizontal = self.bandpass_filter(np.array(landmarks)[:,[2,3,4],0].mean(axis=1),fs=self.fps)
+        tremorSignal_Vertical = self.bandpass_filter(np.array(landmarks)[:,[1,2,3],1].mean(axis=1),fs=self.fps)
+        tremorSignal_Horizontal = self.bandpass_filter(np.array(landmarks)[:,[1,2,3],0].mean(axis=1),fs=self.fps)
 
         timeSignal = np.arange(len(tremorSignal_Vertical)) / self.fps  # time vector for the signal
 
@@ -322,6 +364,8 @@ class HandTremorRightTask(BaseTask):
         end_time = self.end_time
         cap.set(cv2.CAP_PROP_POS_MSEC, start_time * 1000)
         boundingBox = self.enlarged_bounding_box
+
+
 
         keypoints_2d_left_NanoModel = []
         keypoints_2d_right_NanoModel = []
@@ -391,6 +435,14 @@ class HandTremorRightTask(BaseTask):
         cap.set(cv2.CAP_PROP_POS_MSEC, start_time * 1000)
 
         boundingBox = self.enlarged_bounding_box
+        
+        camera_args = {}
+        if self.field_of_view is not None:
+            camera_args["default_fov_degrees"] = int(self.field_of_view)
+        if self.intrinsic_matrix is not None:
+            camera_args["intrinsic_matrix"] = tf.convert_to_tensor(self.intrinsic_matrix.astype(np.float32))
+        if self.extrinsic_matrix is not None:
+            camera_args["extrinsic_matrix"] = tf.convert_to_tensor(self.extrinsic_matrix.astype(np.float32))
     
         left_iris_diameters = []
         right_iris_diameters = []
@@ -464,7 +516,7 @@ class HandTremorRightTask(BaseTask):
 
 
                         #use MeTrabs to estimate the 3D pose
-                        resultsMeTrabs = self._modelMeTrabs.detect_poses(frame, skeleton='mpi_inf_3dhp_17')
+                        resultsMeTrabs = self._modelMeTrabs.detect_poses(frame, skeleton='mpi_inf_3dhp_17', **camera_args)
                     
                         if resultsMeTrabs:
                             pose = resultsMeTrabs['poses3d'][0].cpu().numpy()
@@ -493,7 +545,7 @@ class HandTremorRightTask(BaseTask):
         else:
             ValidPose = False
             pixel_to_mm_conversion_factor = 1
-            print(f"No valid pose detected. Cannot calculate pixel-to-mm conversion factor. \n Pixel-to-mm Conversion Factor: {pixel_to_mm_conversion_factor}")
+            raise Exception("No valid head pose detected. Cannot calculate iris diameter. \n Pixel-to-mm Conversion Factor: {pixel_to_mm_conversion_factor}")
         
         return pixel_to_mm_conversion_factor
 

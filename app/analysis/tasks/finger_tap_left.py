@@ -14,12 +14,6 @@ from app.analysis.detectors.mp_hand_detector import HandDetector
 from app.analysis.signal_analyzers.peakfinder_signal_analyzer import PeakfinderSignalAnalyzer
 
 class FingerTapLeftTask(BaseTask):
-    """
-    Left Finger Tap Task:
-      - Calculates the signal as the Euclidean distance between the thumb tip and index finger tip.
-      - Normalization factor is the maximum distance between the middle finger tip and wrist over all frames.
-    This task always uses the left hand.
-    """
 
 # ------------------------------------------------------------------
 # --- START: Abstract properties definitions
@@ -74,9 +68,6 @@ class FingerTapLeftTask(BaseTask):
 # --- START: Abstract methods definitions
 # -------------------------------------------------------------
     def api_response(self, request):
-        """
-        Entry point for processing the left finger tap task.
-        """
         try:
             # 1) Process video and define all abstract class parameters
             self.prepare_video_parameters(request)
@@ -98,7 +89,8 @@ class FingerTapLeftTask(BaseTask):
 
             
             # 5) Calculate the signal using the land marks
-            normalization_factor = self.calculate_normalization_factor(essential_landmarks)
+            normalization_factor = self.calculate_normalization_factor(all_landmarks)
+            print("Norm factor", normalization_factor)
 
             # 6) Calculate the  normalization factor using the land marks
             raw_signal = self.calculate_signal(essential_landmarks)
@@ -121,7 +113,7 @@ class FingerTapLeftTask(BaseTask):
             output["normalization_factor"] = normalization_factor
 
         except Exception as e:
-            raise Exception(str(e))
+            return {'Error': str(e)}
 
         finally:
             if self.video and self.video.isOpened():
@@ -169,6 +161,7 @@ class FingerTapLeftTask(BaseTask):
         original_bounding_box = json_data['boundingBox']
         start_time = json_data['start_time']
         end_time = json_data['end_time']
+        norm_strategy = json_data['norm_strategy']
         fps = video.get(cv2.CAP_PROP_FPS)
         start_frame_idx = math.floor(fps * start_time)
         end_frame_idx = math.floor(fps * end_time)
@@ -196,6 +189,7 @@ class FingerTapLeftTask(BaseTask):
         self.start_frame_idx = start_frame_idx
         self.end_frame_idx = end_frame_idx
         self.fps = fps
+        self.norm_strategy = norm_strategy
 
         return {
             "video": video,
@@ -214,24 +208,14 @@ class FingerTapLeftTask(BaseTask):
 
 
     def get_detector(self) -> object:
-        """
-        Returns the mediapipe hand detector.
-        """
         return HandDetector().get_detector()
 
 
     def get_signal_analyzer(self) -> object:
-        """
-        Returns the signal analyzer.
-        """
         return PeakfinderSignalAnalyzer()
 
     @staticmethod
     def extract_landmarks(video_path, start_frame_idx, end_frame_idx, fps, enlarged_bounding_box, original_bounding_box, LANDMARKS) -> tuple:
-        """
-        Processes video frames and extracts left hand landmarks.
-        For each frame, retrieves thumb tip, index finger tip, middle finger tip, and wrist.
-        """
         detector = HandDetector().get_detector()
         essential_landmarks = []
         all_landmarks = []
@@ -291,10 +275,6 @@ class FingerTapLeftTask(BaseTask):
 
 
     def calculate_signal(self, essential_landmarks) -> list:
-        """
-        For each frame, computes the Euclidean distance between the thumb tip and index finger tip.
-        Uses the previous valid value if landmarks are missing.
-        """
         signal = []
         prev_dist = 0
         for frame_lms in essential_landmarks:
@@ -308,19 +288,55 @@ class FingerTapLeftTask(BaseTask):
         return signal
 
 
-    def calculate_normalization_factor(self, essential_landmarks) -> float:
-        """
-        Computes the maximum distance between the middle finger tip and wrist across frames.
-        """
-        distances = []
-        for frame_lms in essential_landmarks:
-            if len(frame_lms) < 4:
+    def calculate_normalization_factor(self, landmarks) -> float:
+        LM = self.LANDMARKS
+        factors = []
+
+        def has_idxs(frame, *idxs):
+            return all(i < len(frame) for i in idxs)
+
+        for frame in landmarks:
+            # THUMB
+            if self.norm_strategy == 'THUMBSIZE':
+                if has_idxs(frame, 
+                            LM['THUMB_CMC'], LM['THUMB_MCP'], 
+                            LM['THUMB_IP'], LM['THUMB_TIP']):
+                    d1 = math.dist(frame[LM['THUMB_MCP']], frame[LM['THUMB_IP']])
+                    d2 = math.dist(frame[LM['THUMB_IP']],  frame[LM['THUMB_TIP']])
+                    factors.append(d1 + d2)
                 continue
-            middle_finger = frame_lms[2]
-            wrist = frame_lms[3]
-            d = math.dist(middle_finger, wrist)
-            distances.append(d)
-        return max(distances) if distances else 1.0
+
+            # PALM
+            if self.norm_strategy == 'PALMSIZE':
+                if has_idxs(frame,
+                            LM['WRIST'],
+                            LM['INDEX_FINGER_MCP'], LM['MIDDLE_FINGER_MCP'],
+                            LM['RING_FINGER_MCP'], LM['PINKY_MCP']):
+                    d1 = math.dist(frame[LM['WRIST']], frame[LM['INDEX_FINGER_MCP']])
+                    d2 = math.dist(frame[LM['WRIST']], frame[LM['MIDDLE_FINGER_MCP']])
+                    d3 = math.dist(frame[LM['WRIST']], frame[LM['RING_FINGER_MCP']])
+                    d4 = math.dist(frame[LM['WRIST']], frame[LM['PINKY_MCP']])
+                    factors.append((d1 + d2 + d3 + d4) / 4)
+                continue
+            
+            # MAX AMPLITUDE
+            if self.norm_strategy == 'MAXAMPLITUDE':
+                if has_idxs(frame, LM['THUMB_TIP'], LM['INDEX_FINGER_TIP']):
+                    dist_val = math.dist(frame[LM['THUMB_TIP']], frame[LM['INDEX_FINGER_TIP']])
+                    factors.append(dist_val)
+                continue
+
+            # DEFAULTS TO INDEX
+            if has_idxs(frame,
+                        LM['INDEX_FINGER_MCP'], LM['INDEX_FINGER_PIP'],
+                        LM['INDEX_FINGER_DIP'], LM['INDEX_FINGER_TIP']):
+                d1 = math.dist(frame[LM['INDEX_FINGER_MCP']], frame[LM['INDEX_FINGER_PIP']])
+                d2 = math.dist(frame[LM['INDEX_FINGER_PIP']], frame[LM['INDEX_FINGER_DIP']])
+                d3 = math.dist(frame[LM['INDEX_FINGER_DIP']], frame[LM['INDEX_FINGER_TIP']])
+                factors.append(d1 + d2 + d3)
+            continue
+
+        return max(factors) if factors else 1.0
 # -------------------------------------------------------------
 # --- END: Abstract methods definitions
 # -------------------------------------------------------------

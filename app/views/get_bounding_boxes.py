@@ -3,11 +3,32 @@ from rest_framework.response import Response
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 import os, uuid, time, json
-
-# 1) Import your newly relocated function
+from pymediainfo import MediaInfo
+from hachoir.parser import createParser
+from hachoir.metadata import extractMetadata
 from app.analysis.detectors.yolo_detectors import yolo_tracker
 
-@api_view(['POST'])
+def get_rotation(path):
+    mi = MediaInfo.parse(path)
+    for track in mi.tracks:
+        if track.track_type == "Video" and getattr(track, 'rotation', None):
+            try:
+                return int(float(track.rotation))
+            except ValueError:
+                pass
+
+    parser = createParser(path)
+    if parser:
+        meta = extractMetadata(parser)
+        if meta and meta.has("rotation"):
+            try:
+                return int(meta.get("rotation").value)
+            except Exception:
+                pass
+
+    return 0
+
+@api_view(['GET'])
 def get_bounding_boxes(request):
 
     # Get all variables set up and check if folder and file paths exist
@@ -17,15 +38,13 @@ def get_bounding_boxes(request):
 
     folder_path = os.path.join(settings.MEDIA_ROOT, "video_uploads")
     project_folder_path = os.path.join(folder_path, video_id)
-    bounding_boxes_path = os.path.join(project_folder_path, 'boundingBoxes.json')
     if not os.path.isdir(project_folder_path):
         return Response("Video project folder does not exist.", status=400)
 
     metadata_file_path = os.path.join(project_folder_path, "metadata.json")
     if not os.path.isfile(metadata_file_path):
         return Response("Video project metadata does not exist.", status=400)
-
-
+    
     # Get video path
     metadata_dict = {}
     with open(metadata_file_path, 'r', encoding='utf-8') as f:
@@ -39,16 +58,19 @@ def get_bounding_boxes(request):
         print("Analysis started")
         start_time = time.time()
 
+        rotation = get_rotation(video_path)
+
         # 1) Build path to YOLO model
         current_dir = os.path.dirname(__file__)
         pathtomodel = os.path.join(current_dir, '../analysis/models/yolov8n.pt')
 
         # 2) Run YOLO-based tracker
-        result = yolo_tracker(video_path, pathtomodel, device='')
+        result = yolo_tracker(video_path, rotation, pathtomodel, device='')
 
         print("Analysis done in %s seconds" % (time.time() - start_time))
 
         # 3) Dump bounding boxes to json
+        bounding_boxes_path = os.path.join(project_folder_path, 'boundingBoxes.json')
         bounding_boxes_wrapped = {
             "boundingBoxes": result['boundingBoxes']
         }

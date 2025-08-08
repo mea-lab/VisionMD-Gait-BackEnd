@@ -118,10 +118,11 @@ class HandMovementRightTask(BaseTask):
             output["normalization_factor"] = normalization_factor
 
         except Exception as e:
-            raise Exception(str(e))
+            return {'Error': str(e)}
 
-        if self.video:
-            self.video.release()
+        finally:
+            if self.video and self.video.isOpened():
+                self.video.release()
 
         return output
 
@@ -337,23 +338,55 @@ class HandMovementRightTask(BaseTask):
 
         return signal
 
-    def calculate_normalization_factor(self, essential_landmarks):
-        """
-        Calculates the max distance from middle_finger to the wrist across all frames.
-        
-        Returns:
-            - The max
-        """
-        distances = []
-        for frame_lms in essential_landmarks:
-            if len(frame_lms) < 4:
-                continue
-            middle_finger = frame_lms[1]
-            wrist = frame_lms[3]
-            d = math.dist(middle_finger, wrist)
-            distances.append(d)
+    def calculate_normalization_factor(self, landmarks) -> float:
+        LM = self.LANDMARKS
+        factors = []
 
-        return max(distances) if distances else 1.0
+        def has_idxs(frame, *idxs):
+            return all(i < len(frame) for i in idxs)
+
+        for frame in landmarks:
+            # THUMB
+            if self.norm_strategy == 'THUMBSIZE':
+                if has_idxs(frame, 
+                            LM['THUMB_CMC'], LM['THUMB_MCP'], 
+                            LM['THUMB_IP'], LM['THUMB_TIP']):
+                    d1 = math.dist(frame[LM['THUMB_MCP']], frame[LM['THUMB_IP']])
+                    d2 = math.dist(frame[LM['THUMB_IP']],  frame[LM['THUMB_TIP']])
+                    factors.append(d1 + d2)
+                continue
+
+            # PALM
+            if self.norm_strategy == 'PALMSIZE':
+                if has_idxs(frame,
+                            LM['WRIST'],
+                            LM['INDEX_FINGER_MCP'], LM['MIDDLE_FINGER_MCP'],
+                            LM['RING_FINGER_MCP'], LM['PINKY_MCP']):
+                    d1 = math.dist(frame[LM['WRIST']], frame[LM['INDEX_FINGER_MCP']])
+                    d2 = math.dist(frame[LM['WRIST']], frame[LM['MIDDLE_FINGER_MCP']])
+                    d3 = math.dist(frame[LM['WRIST']], frame[LM['RING_FINGER_MCP']])
+                    d4 = math.dist(frame[LM['WRIST']], frame[LM['PINKY_MCP']])
+                    factors.append((d1 + d2 + d3 + d4) / 4)
+                continue
+            
+            # MAX AMPLITUDE
+            if self.norm_strategy == 'MAXAMPLITUDE':
+                if has_idxs(frame, LM['THUMB_TIP'], LM['INDEX_FINGER_TIP']):
+                    dist_val = math.dist(frame[LM['THUMB_TIP']], frame[LM['INDEX_FINGER_TIP']])
+                    factors.append(dist_val)
+                continue
+
+            # DEFAULTS TO INDEX
+            if has_idxs(frame,
+                        LM['INDEX_FINGER_MCP'], LM['INDEX_FINGER_PIP'],
+                        LM['INDEX_FINGER_DIP'], LM['INDEX_FINGER_TIP']):
+                d1 = math.dist(frame[LM['INDEX_FINGER_MCP']], frame[LM['INDEX_FINGER_PIP']])
+                d2 = math.dist(frame[LM['INDEX_FINGER_PIP']], frame[LM['INDEX_FINGER_DIP']])
+                d3 = math.dist(frame[LM['INDEX_FINGER_DIP']], frame[LM['INDEX_FINGER_TIP']])
+                factors.append(d1 + d2 + d3)
+            continue
+
+        return max(factors) if factors else 1.0
     # -------------------------------------------------------------
     # --- END: Abstract methods definitions
     # -------------------------------------------------------------

@@ -20,7 +20,7 @@ def create_yolo_detector(model_path="yolov8s.pt", device='cpu'):
     return YOLO(model_path), device
 
 
-def yolo_tracker(file_path, model_path="yolov8s.pt", device='cpu'):
+def yolo_tracker(file_path, rotation, model_path="yolov8s.pt", device='cpu'):
     """
     Runs YOLOv8 tracking and returns bounding boxes (every 10 frames),
     remapping IDs to be consecutive.
@@ -46,6 +46,16 @@ def yolo_tracker(file_path, model_path="yolov8s.pt", device='cpu'):
         success, frame = cap.read()
         if not success:
             break
+
+        if rotation != 0:
+            if rotation == 90:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            elif rotation == 180:
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
+            elif rotation == 270:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            else:
+                raise ValueError("Rotation must be one of [0, 90, 180, 270]")
 
         if frameNumber % 10 == 0:
             # Run YOLOv8 tracking on this frame

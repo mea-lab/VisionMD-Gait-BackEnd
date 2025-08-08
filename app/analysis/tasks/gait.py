@@ -8,9 +8,7 @@ from django.core.files.storage import FileSystemStorage
 import gc
 import tensorflow as tf
 from tensorflow.python.eager.context import context
-import numpy as np
 import cv2
-import numpy as np
 from tqdm import tqdm
 import tensorflow_hub as hub
 import gc
@@ -39,6 +37,7 @@ class GaitTask(BaseTask):
     file_path = None
     file_name = None
     task_name = None
+    rotation = None
 
     fps = None
     start_time = None
@@ -181,6 +180,7 @@ class GaitTask(BaseTask):
         video_width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
         video_height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = video.get(cv2.CAP_PROP_FPS)
+        rotation = metadata["metadata"]["rotation"]
         start_time = json_data['start_time']
         end_time = json_data['end_time']
         start_frame_idx = math.floor(fps * start_time)
@@ -208,12 +208,18 @@ class GaitTask(BaseTask):
         intrinsic_matrix = np.array(json_data.get('intrinsic_matrix')) if json_data.get('intrinsic_matrix') else None
         extrinsic_matrix = np.array(json_data.get('extrinsic_matrix')) if json_data.get('extrinsic_matrix') else None
 
-        print("field_of_view:", field_of_view, "| type:", type(field_of_view))
-        print("sensor_height:", sensor_height, "| type:", type(sensor_height))
-        print("sensor_width:", sensor_width, "| type:", type(sensor_width))
-        print("focal_length:", focal_length, "| type:", type(focal_length))
-        print("intrinsic_matrix:\n", intrinsic_matrix, "\n| type:", type(intrinsic_matrix))
-        print("extrinsic_matrix:\n", extrinsic_matrix, "\n| type:", type(extrinsic_matrix))
+        # focal length [pixels] = focal length [mm] / sensor pixel size [µm/pixels]
+
+        if(sensor_height != None and sensor_width != None and focal_length != None and intrinsic_matrix == None):
+            fx = focal_length / sensor_width * 1000
+            cx = video_width / 2
+            fy = focal_length / sensor_height * 1000
+            cy = video_height / 2
+            intrinsic_matrix = [
+                [fx, 0,  cx],
+                [0,  fy, cy],
+                [0,  0,   0],
+            ]
 
 
         if ( abs(len(subject_bounding_boxes) - (end_frame_idx - start_frame_idx + 1)) > 1 ):
@@ -231,6 +237,7 @@ class GaitTask(BaseTask):
         self.task_name = task_name
         self.video = video
         self.fps = fps
+        self.rotation = rotation
         self.start_time = start_time
         self.end_time = end_time
         self.start_frame_idx = start_frame_idx
@@ -369,102 +376,97 @@ class GaitTask(BaseTask):
                 - all_preds: dict with keys "poses2d", "poses3d", "boxes" for the normal frames
                 - mirrored_all_preds: dict with keys "poses2d", "poses3d", "boxes" for the mirrored frames
         """
+        # Set up video and task arguments
         file_path = self.file_path
         file_name = os.path.splitext(os.path.basename(file_path))[0]
         start_frame = self.start_frame_idx
         end_frame = self.end_frame_idx
 
-        field_of_view = self.field_of_view
-        sensor_height = self.sensor_height
-        sensor_width = self.sensor_width
-        focal_length = self.focal_length
-        intrinsic_matrix = self.intrinsic_matrix
-        extrinsic_matrix = self.extrinsic_matrix
-
+        # Set up lists for extracting landmarks
         poses2d_lists, poses3d_lists, boxes_lists = [], [], []
         poses2d_lists_mirr, poses3d_lists_mirr, boxes_lists_mirr = [], [], []
         missing_mask = []
         multiple_people_detected = False
 
-        
         cap = cv2.VideoCapture(file_path)
         orig_width  = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         cap.release()
 
-        # reader
+        # Set up video reader
         batch_size = 16
-        vid = self.video_reader(file_path, batch_size, start_frame)
+        vid = self.video_reader(file_path, batch_size, start_frame, end_frame)
         raw_frame_idx = start_frame
-        stop = False
 
+        # Iterate over every frame batch
         for frame_batch in tqdm(vid, desc=f"Processing {file_name}"):
-            # collect just the frames in the desired [start_frame, end_frame] range
-            frames = []
-            for frame in frame_batch:
-                if raw_frame_idx < start_frame:
-                    raw_frame_idx += 1
-                    continue
-                if raw_frame_idx > end_frame:
-                    stop = True
-                    break
-                frames.append(frame)
-                raw_frame_idx += 1
-            if stop and not frames:
-                break
-            if not frames:
-                continue
-
             # --- Prepare tensors for BOTH original and mirrored batches ---
-            batch_np = np.stack(frames)
+            batch_np = frame_batch
             batch_tensor = tf.convert_to_tensor(batch_np, dtype=tf.uint8)
-            # mirror via TensorFlow
             batch_tensor_mirr = tf.image.flip_left_right(batch_tensor)
-            n = batch_tensor.shape[0]
-            frame_idx_list = list(range(raw_frame_idx - len(frames), raw_frame_idx))
+            batch_size = batch_tensor.shape[0]
+            frame_idx_list = list(range(raw_frame_idx, raw_frame_idx + batch_size))
+            raw_frame_idx += batch_size
 
             # --- Create bounding boxes for original frames ---
+            bbox_map = {
+                item["frameNumber"]: item["data"][0]
+                for item in self.subject_bounding_boxes
+                if item.get("data")
+            }
             boxes_list = []
+            mirrored_list = []
             for frame_num in frame_idx_list:
-                bbox_entry = next((item for item in self.subject_bounding_boxes if item["frameNumber"] == frame_num), None)
-                if bbox_entry and bbox_entry["data"]:
-                    subject_box = next(box for box in bbox_entry["data"])
-                    if subject_box:
-                        x, y = subject_box["x"], subject_box["y"]
-                        w, h = subject_box["width"], subject_box["height"]
-                        boxes_list.append([[float(x), float(y), float(w), float(h)]])
-                    else:
-                        raise Exception(f"Subject bounding box not found for frame idx {frame_num}")
-                else:
-                    raise Exception(f"Subject bounding box not found for frame idx {frame_num}")
-            boxes = tf.ragged.constant(boxes_list, ragged_rank=1, inner_shape=(4,), dtype=tf.float32)
-            
-            # --- Create bounding boxes for mirrored frames ---
-            mirrored_boxes_list = []
-            for box_per_frame in boxes_list:
-                original_box = box_per_frame[0]
-                x, y, w, h = original_box
-                mirrored_x = orig_width - (x + w)
-                mirrored_boxes_list.append([[mirrored_x, y, w, h]])
-            boxes_mirrored = tf.ragged.constant(mirrored_boxes_list, ragged_rank=1, inner_shape=(4,), dtype=tf.float32)
+                subject_box = bbox_map.get(frame_num)
+                if subject_box is None:
+                    raise Exception(f"No bounding box for frame {frame_num}")
 
-            print("boxes.shape:", boxes.shape)
-            print("boxes.dtype:", boxes.dtype)
-            print("boxes_mirrored.shape:", boxes_mirrored.shape)
-            print("boxes_mirrored.dtype:", boxes_mirrored.dtype)
+                x, y, w, h = (float(subject_box['x']),
+                    float(subject_box['y']),
+                    float(subject_box['width']),
+                    float(subject_box['height']),
+                )
+                boxes_list.append([[x, y, w, h]])
+                mirrored_x = orig_width - (x + w)
+                mirrored_list.append([[mirrored_x, y, w, h]])
+
+            boxes = tf.ragged.constant(boxes_list, ragged_rank=1, inner_shape=(4,), dtype=tf.float32)
+            boxes_mirrored = tf.ragged.constant(mirrored_list, ragged_rank=1, inner_shape=(4,), dtype=tf.float32)
+
+            # --- Set up optional camera parameters for this ---
+            scalar_camera_args = {
+                k: int(v) 
+                for k, v in
+                {
+                    "default_fov_degrees": self.field_of_view,
+                }.items()
+                if v != None
+            }
+            matrix_camera_args = {
+                k: tf.convert_to_tensor(np.stack([v] * batch_size).astype(np.float32))
+                for k, v in {
+                    "intrinsic_matrix": self.intrinsic_matrix,
+                    "extrinsic_matrix": self.extrinsic_matrix,
+                }.items()
+                if v is not None
+            }
 
             pred = GaitTask._metrabs_detector.estimate_poses_batched(
                 images=batch_tensor,
                 boxes=boxes,
                 skeleton=self.skeleton,
+                **scalar_camera_args,
+                **matrix_camera_args,
             )
             pred_mirr = GaitTask._metrabs_detector.estimate_poses_batched(
                 images=batch_tensor_mirr,
                 boxes=boxes_mirrored,
                 skeleton=self.skeleton,
+                **scalar_camera_args,
+                **matrix_camera_args,
             )
 
             # --- Accumulate both original and mirrored detections ---
-            for j in range(n):
+            for j in range(batch_size):
                 # ORIGINAL
                 if pred["poses2d"][j].shape[0] > 0:
                     poses2d_lists.append(pred["poses2d"][j:j+1, 0:1].numpy())
@@ -534,7 +536,6 @@ class GaitTask(BaseTask):
         """
         Colour the left/right ankles green during stance and blue during swing.
         """
-        import numpy as np
 
         def to_idx(arr):
             """Floor to int and keep inside [0, n_frames-1]."""
@@ -735,7 +736,7 @@ class GaitTask(BaseTask):
 
 
     # Video Reader helper function
-    def video_reader(self, filepath, batch_size=4, start_frame=0):
+    def video_reader(self, filepath, batch_size=4, start_frame=0, end_frame=None):
         if not os.path.isfile(filepath):
             print("Error: File path is not a video")
             return None, None
@@ -743,6 +744,8 @@ class GaitTask(BaseTask):
         cap = cv2.VideoCapture(filepath)
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         frames = []
+        frame_idx = start_frame
+
         while True:
             ret, frame_bgr = cap.read()
             if not ret:
@@ -750,8 +753,22 @@ class GaitTask(BaseTask):
                     yield np.stack(frames)
                 break
 
+            if end_frame is not None and frame_idx > end_frame:
+                if frames:
+                    yield np.stack(frames)
+                break
+
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            rotation_code = {
+                90: cv2.ROTATE_90_CLOCKWISE,
+                180: cv2.ROTATE_180,
+                270: cv2.ROTATE_90_COUNTERCLOCKWISE
+            }.get(self.rotation, None)
+            if rotation_code is not None:
+                frame_rgb = cv2.rotate(frame_rgb, rotation_code)
             frames.append(frame_rgb)
+            frame_idx += 1
+
             if len(frames) == batch_size:
                 yield np.stack(frames)
                 frames = []
