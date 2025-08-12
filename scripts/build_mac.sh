@@ -1,6 +1,6 @@
 pyinstaller serve_mac.py \
   --console \
-  --onedir \
+  --onedir  \
   --distpath ./pyinstaller_builds \
   --add-data "VideoAnalysisToolBackend:VideoAnalysisToolBackend" \
   --add-data "app:app" \
