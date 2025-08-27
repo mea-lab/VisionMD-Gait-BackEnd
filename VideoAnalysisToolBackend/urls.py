@@ -29,8 +29,6 @@ urlpatterns = [
     path('media/<path:path>', get_stream_media),
 ]
 
-# urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-# urlpatterns += static(settings.STATIC_URL, document_root=settings.STATICFILES_DIRS[0])
 
 urlpatterns += [
     re_path(r'^.*$', TemplateView.as_view(template_name="index.html")),

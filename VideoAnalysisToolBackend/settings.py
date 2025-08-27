@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -130,6 +131,49 @@ TEMPLATES[0]['DIRS'] = [BASE_DIR / 'dist']
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
+
+# MacOS configuration
+APP_NAME  = os.environ.get("VMD_APP_NAME", "VisionMD Desktop App")
+BUNDLE_ID = os.environ.get("VMD_BUNDLE_ID", "com.mealab.visionmd")
+
+if sys.platform == "darwin":
+    lib = Path.home() / "Library"
+
+    # Detect sandbox via env var or container presence
+    is_sandbox = bool(os.environ.get("APP_SANDBOX_CONTAINER_ID")) or (lib / "Containers" / BUNDLE_ID).exists()
+    base = (lib / "Containers" / BUNDLE_ID / "Data" / "Library") if is_sandbox else lib
+
+    DATA_DIR  = base / "Application Support" / APP_NAME
+    CACHE_DIR = base / "Caches" / APP_NAME
+    for p in (DATA_DIR, CACHE_DIR, DATA_DIR / "uploads", DATA_DIR / "logs", CACHE_DIR / "tmp"):
+        p.mkdir(parents=True, exist_ok=True)
+
+    # Use container for user data and DB
+    MEDIA_ROOT = str(DATA_DIR / "uploads")
+    if DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3":
+        DATABASES["default"]["NAME"] = str(DATA_DIR / "db.sqlite3")
+
+    # Log to container
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "handlers": {
+            "console": {"class": "logging.StreamHandler"},
+            "file": {
+                "class": "logging.FileHandler",
+                "filename": str(DATA_DIR / "logs" / "django.log"),
+                "delay": True,
+            },
+        },
+        "root": {"handlers": ["console", "file"], "level": "INFO"},
+    }
+
+    # Make all temp I/O MAS-safe (Python, Waitress, ffmpeg/OpenCV)
+    for k in ("TMPDIR", "TMP", "TEMP"):
+        os.environ.setdefault(k, str(CACHE_DIR / "tmp"))
+
+# CORS (current setting name)
+CORS_ALLOW_ALL_ORIGINS = True
 
 
 

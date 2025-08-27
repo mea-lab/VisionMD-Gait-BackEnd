@@ -2,6 +2,20 @@ import os
 import sys
 import logging
 from multiprocessing import freeze_support
+import mimetypes
+import pathlib
+import tzdata
+
+zoneinfo_dir = pathlib.Path(tzdata.__file__).parent / "zoneinfo"
+os.environ.setdefault("PYTHONTZPATH", str(zoneinfo_dir))
+os.environ.setdefault("TZDIR", str(zoneinfo_dir))
+
+mimetypes.init(files=[])
+mimetypes.add_type('image/jpeg', '.jpg')
+mimetypes.add_type('image/jpeg', '.jpeg')
+mimetypes.add_type('image/png',  '.png')
+mimetypes.add_type('image/webp', '.webp')
+mimetypes.add_type('video/mp4',  '.mp4')
 
 logging.basicConfig(
     level=logging.INFO,
